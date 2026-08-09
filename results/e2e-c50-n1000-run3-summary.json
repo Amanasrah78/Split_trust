@@ -1,0 +1,27 @@
+{
+  "client_latency": {
+    "max_ms": 202.711916,
+    "mean_ms": 122.71982742200001,
+    "median_ms": 115.6254795,
+    "min_ms": 11.780875,
+    "p95_ms": 170.49000419999996,
+    "p99_ms": 195.20970342
+  },
+  "concurrency": 50,
+  "failures": 0,
+  "mode": "e2e",
+  "primary_latency": {
+    "max_ms": 150.163416,
+    "mean_ms": 76.24170612099999,
+    "median_ms": 71.965438,
+    "min_ms": 2.965459,
+    "p95_ms": 100.16529374999999,
+    "p99_ms": 139.43416759
+  },
+  "primary_metric": "e2e_ns",
+  "requests": 1000,
+  "successes": 1000,
+  "test_elapsed_seconds": 2.483367668,
+  "throughput_successes_per_second": 402.6789963023711,
+  "warmup": 100
+}

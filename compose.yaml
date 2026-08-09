@@ -1,0 +1,175 @@
+name: split-trust-testbed
+
+x-runtime: &runtime
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: split-trust-testbed:local
+  init: true
+  restart: unless-stopped
+  networks:
+    - split-trust
+
+x-healthcheck: &healthcheck
+  interval: 2s
+  timeout: 2s
+  retries: 30
+  start_period: 20s
+
+services:
+  ledger-adapter:
+    <<: *runtime
+    working_dir: /app/services/ledger-adapter
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment:
+      LEDGER_MODE: ${LEDGER_MODE:-simulated}
+      LEDGER_SIMULATED_FINALITY_MS: ${LEDGER_SIMULATED_FINALITY_MS:-12000}
+      LEDGER_WORKER_COUNT: ${LEDGER_WORKER_COUNT:-64}
+      LEDGER_EPOCH_DIGEST_B64: ${LEDGER_EPOCH_DIGEST_B64:?required}
+    ports:
+      - "8083:8000"
+    healthcheck:
+      <<: *healthcheck
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+  sac:
+    <<: *runtime
+    working_dir: /app/services/sac
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment:
+      GATEWAY_A_DID: did:iota:gateway-a
+      GATEWAY_B_DID: did:iota:gateway-b
+      GATEWAY_B_URL: http://gateway-b:8000
+      LEDGER_URL: http://ledger-adapter:8000
+      SAC_SIGNING_SEED_B64: ${SAC_SIGNING_SEED_B64:?required}
+      SAC_CHANNEL_KEY_A_B64: ${SAC_CHANNEL_KEY_A_B64:?required}
+      SAC_CHANNEL_KEY_B_B64: ${SAC_CHANNEL_KEY_B_B64:?required}
+      DEVICE_ROOT_B64: ${DEVICE_ROOT_B64:?required}
+      ALLOWED_ACTIONS: operate,read,status
+    ports:
+      - "8081:8000"
+    depends_on:
+      ledger-adapter:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+  gateway-b:
+    <<: *runtime
+    working_dir: /app/services/gateway-b
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment:
+      GATEWAY_A_DID: did:iota:gateway-a
+      GATEWAY_B_DID: did:iota:gateway-b
+      SAC_URL: http://sac:8000
+      LEDGER_URL: http://ledger-adapter:8000
+      SAC_CHANNEL_KEY_B_B64: ${SAC_CHANNEL_KEY_B_B64:?required}
+    ports:
+      - "8082:8000"
+    depends_on:
+      sac:
+        condition: service_healthy
+      ledger-adapter:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+  gateway-a:
+    <<: *runtime
+    working_dir: /app/services/gateway-a
+    command:
+      - uvicorn
+      - app.main:app
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8000"
+      - --workers
+      - "1"
+    environment:
+      GATEWAY_A_DID: did:iota:gateway-a
+      GATEWAY_B_DID: did:iota:gateway-b
+      SAC_URL: http://sac:8000
+      GATEWAY_B_URL: http://gateway-b:8000
+      LEDGER_URL: http://ledger-adapter:8000
+      SAC_CHANNEL_KEY_A_B64: ${SAC_CHANNEL_KEY_A_B64:?required}
+    ports:
+      - "8080:8000"
+    depends_on:
+      sac:
+        condition: service_healthy
+      gateway-b:
+        condition: service_healthy
+      ledger-adapter:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthcheck
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+
+  loadgen:
+    <<: *runtime
+    profiles:
+      - tools
+    restart: "no"
+    working_dir: /app/services/loadgen
+    command:
+      - python
+      - -m
+      - app.benchmark
+      - --help
+    environment:
+      GATEWAY_A_URL: http://gateway-a:8000
+      SAC_URL: http://sac:8000
+    volumes:
+      - ./results:/results
+    depends_on:
+      gateway-a:
+        condition: service_healthy
+      sac:
+        condition: service_healthy
+
+networks:
+  split-trust:
+    driver: bridge
