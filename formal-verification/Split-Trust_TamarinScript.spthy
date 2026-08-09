@@ -1,0 +1,516 @@
+/*
+===============================================================================
+Release Note
+===============================================================================
+Model name : SplitTrust_IOTA_STAP_PQKEM
+Author     : Ahmed M. Manasrah
+Affiliation: Yarmouk University, Jordan
+
+Description:
+This Tamarin model captures a split-trust, IOTA-backed, post-quantum
+session-establishment protocol for cross-domain Industrial IoT settings.
+
+Main verification goals:
+- Mutual authentication between gateways
+- Session key secrecy and agreement
+- Unknown key-share resistance
+- Session identifier uniqueness
+- Ledger accountability and revocation ordering
+- Resilience against key-compromise impersonation under split-trust assumptions
+
+Modeling notes:
+- The post-quantum key establishment is abstracted symbolically.
+- CT represents the public KEM ciphertext.
+- Z represents the shared lattice-derived secret K_LTW.
+- AuthS represents the confidential SAC-issued authorization secret S_auth.
+- Ledger anchors are public and immutable.
+- SAC is assumed uncompromised unless an explicit reveal rule is added.
+
+Version note:
+This release corresponds to the final working version in which all lemmas are
+reported as proven.
+===============================================================================
+*/
+
+theory SplitTrust_IOTA_STAP_PQKEM
+
+begin
+
+/* ============================================================================
+   BUILTINS AND ABSTRACT FUNCTIONS
+   ----------------------------------------------------------------------------
+   signing : built-in asymmetric signing / verification abstraction
+   hashing : built-in hash abstraction
+   kdf/1   : abstract key-derivation function
+   view/1  : abstract function used to derive an IOTA ledger view
+   mac/2   : abstract message authentication code
+   ============================================================================ */
+
+builtins: signing, hashing
+functions: kdf/1, view/1, mac/2
+
+
+/* ============================================================================
+   LONG-TERM KEYS
+   ----------------------------------------------------------------------------
+   This rule initializes long-term key pairs for all protocol principals:
+   - SAC : Session Authorization Controller
+   - GA  : Gateway A
+   - GB  : Gateway B
+   - R   : Remote resource / actuator side identity
+   Public keys are intentionally released to the adversary, while secret keys
+   remain protected unless an explicit reveal rule is invoked.
+   ============================================================================ */
+
+rule Init_LongTermKeys:
+  [ Fr(~skSAC), Fr(~skGA), Fr(~skGB), Fr(~skR) ]
+  -->
+  [ !Ltk('SAC', ~skSAC), !Pk('SAC', pk(~skSAC)),
+    !Ltk('GA',  ~skGA),  !Pk('GA',  pk(~skGA)),
+    !Ltk('GB',  ~skGB),  !Pk('GB',  pk(~skGB)),
+    !Ltk('R',   ~skR),   !Pk('R',   pk(~skR)),
+    Out(pk(~skSAC)), Out(pk(~skGA)), Out(pk(~skGB)), Out(pk(~skR))
+  ]
+
+
+/* ============================================================================
+   PHASE 0 — DID + VC ANCHORING (ABSTRACTED)
+   ----------------------------------------------------------------------------
+   These rules model the initial decentralized-identity setup.
+   The ledger stores only commitments, not raw identity documents or credentials.
+   ============================================================================ */
+
+/* Anchor a DID on the IOTA ledger.
+   - ~did : decentralized identifier
+   - ~doc : DID document (kept abstract)
+   - ~tx  : transaction / anchor reference
+*/
+rule Anchor_DID:
+  [ Fr(~did), Fr(~doc), Fr(~tx) ]
+  --[ DIDAnchored(~did, ~tx) ]->
+  [ !DID(~did),
+    !IOTA_Anchor('did', ~did, h(~doc), ~tx)
+  ]
+
+/* Issue and anchor a verifiable credential for a DID.
+   The credential is represented abstractly by its expiry or validity parameter.
+*/
+rule Issue_VC:
+  [ !DID(didR), Fr(~exp), Fr(~tx) ]
+  --[ VCAnchored(didR, ~tx) ]->
+  [ VC(didR, ~exp),
+    !IOTA_Anchor('vc', didR, h(<didR, ~exp>), ~tx)
+  ]
+
+
+/* ============================================================================
+   PHASE 1 — REGISTRATION
+   ----------------------------------------------------------------------------
+   This rule models registration of Gateway B under a DID-backed credential.
+   The registration event is also anchored on the IOTA ledger.
+   ============================================================================ */
+
+rule Register_Device:
+  [ VC(didR, exp), Fr(~tx) ]
+  --[ RegCompleted(didR, 'GB', ~tx) ]->
+  [ !Registration(didR, 'GB', ~tx),
+    !IOTA_Anchor('reg', didR, h(<didR,'GB'>), ~tx)
+  ]
+
+
+/* ============================================================================
+   PHASE 2 — SAC ISSUES SESSION CONTEXT
+   ----------------------------------------------------------------------------
+   SAC creates a session context after registration succeeds.
+   This includes:
+   - a fresh session identifier IDsess
+   - a SAC-generated secret contribution Ssac
+   - an abstract ledger view binding RIOTA
+   - a public salt commitment anchored on the ledger
+   ============================================================================ */
+
+rule SAC_Issue_SessionContext:
+  [ !Registration(didR, 'GB', txReg),
+    Fr(~IDsess), Fr(~Ssac), Fr(~Sigma), Fr(~txSalt)
+  ]
+  --[ SessionIssued(~IDsess, didR) ]->
+  [ SessionContext(
+        didR,
+        ~IDsess,
+        ~Ssac,
+        h(<~IDsess, view(<~Sigma, ~IDsess>)>)
+    ),
+    !IOTA_Anchor('salt', ~IDsess, h(h(<~IDsess, ~Ssac>)), ~txSalt)
+  ]
+
+
+/* ============================================================================
+   PHASE 2 — SAC ISSUES CONFIDENTIAL AUTHORIZATION SECRET
+   ----------------------------------------------------------------------------
+   This rule models trusted SAC-side provisioning of the confidential session
+   authorization secret AuthS to BOTH gateways.
+   Important:
+   - AuthS is intentionally NOT sent over the public channel.
+   - If AuthS were output, the split-trust/KCI guarantees would collapse.
+   ============================================================================ */
+
+rule SAC_Issue_AuthSecret:
+  [ SessionContext(didR, IDsess, Ssac, RIOTA),
+    Fr(~AuthS)
+  ]
+  --[ AuthSecretIssued(IDsess, didR) ]->
+  [ !AuthSecret(IDsess, didR, ~AuthS) ]
+
+
+/* ============================================================================
+   PHASE 2 — POST-QUANTUM (SYMBOLIC) SESSION ESTABLISHMENT
+   ----------------------------------------------------------------------------
+   The RLWE/KEM exchange is modeled symbolically:
+   - CT  : public KEM ciphertext
+   - Z   : shared secret corresponding to K_LTW in the paper
+   - !KEM_Map('GB', CT, Z) : private decapsulation relation for GB
+   ============================================================================ */
+
+/* Gateway A starts the session.
+   It:
+   - retrieves the SAC-issued session context and AuthS,
+   - samples a fresh abstract ciphertext CT,
+   - samples the associated shared secret Z,
+   - samples a fresh nonce nA,
+   - outputs the initiation message,
+   - stores its local state for the completion step.
+*/
+rule GA_Start_Session_PQKEM:
+  [ SessionContext(didR, IDsess, Ssac, RIOTA),
+    !AuthSecret(IDsess, didR, AuthS),
+    Fr(~CT), Fr(~Z), Fr(~nA)
+  ]
+  --[ GA_Start('GA','GB',didR,IDsess) ]->
+  [ Out(< 'ga_kem', IDsess, ~CT, ~nA >),
+    !KEM_Map('GB', ~CT, ~Z),
+    St_GA(IDsess, didR, Ssac, RIOTA, AuthS, ~Z, ~nA)
+  ]
+
+
+/* Gateway B responds to the session initiation.
+   Preconditions:
+   - receives GA's KEM message
+   - has the session context
+   - has the confidential authorization secret AuthS
+   - can decapsulate the ciphertext through !KEM_Map
+   - has a valid SAC-issued session token
+
+   Computation:
+   - derives the session key K
+   - computes a MAC-based confirmation tag Tag
+
+   Output:
+   - sends the final response including nonce nB, token, expiry, tag,
+     and a signature for auxiliary evidence / logging
+   - records SessionEstablished
+*/
+rule GB_Respond_Session_PQKEM:
+  let
+    K   = kdf(<Z, Ssac, RIOTA, IDsess, nA, ~nB, AuthS>)
+    Tag = mac(<IDsess, nA, ~nB, TokSig, exp>, K)
+  in
+  [
+    In(< 'ga_kem', IDsess, CT, nA >),
+    SessionContext(didR, IDsess, Ssac, RIOTA),
+    !AuthSecret(IDsess, didR, AuthS),
+    !KEM_Map('GB', CT, Z),
+
+    /* Token validity is modeled by requiring the Token fact.
+       Only SAC_Issue_Token can create this fact. */
+    Token(IDsess, didR, 'GA', 'GB', exp, TokSig),
+
+    !Ltk('GB', skGB),
+    Fr(~nB)
+  ]
+  --[ GB_Complete('GB','GA',didR,IDsess),
+      SessionEstablished('GA','GB',didR,IDsess,K)
+    ]->
+  [
+    Out(< 'gb_resp', IDsess, ~nB, TokSig, exp, Tag,
+          sign(<IDsess, ~nB, TokSig, exp, Tag>, skGB) >),
+    !SessionKey('GA','GB',didR,IDsess,K)
+  ]
+
+
+/* Gateway A finishes the session.
+   It:
+   - receives GB's final response,
+   - reconstructs the same session key K,
+   - recomputes the confirmation tag Tag,
+   - requires that SAC issued the token,
+   - then emits the completion and SessionEstablished events.
+
+   Note:
+   The MAC tag is the main authentication mechanism in this symbolic model.
+   The GB signature is kept in the message for completeness / logging, but is
+   not explicitly verified here.
+*/
+rule GA_Finish_Session_PQKEM:
+  let
+    K   = kdf(<Z, Ssac, RIOTA, IDsess, nA, nB, AuthS>)
+    Tag = mac(<IDsess, nA, nB, TokSig, exp>, K)
+  in
+  [
+    In(< 'gb_resp', IDsess, nB, TokSig, exp, Tag, SigGB >),
+
+    St_GA(IDsess, didR, Ssac, RIOTA, AuthS, Z, nA),
+
+    /* Require that SAC really issued the token for this session. */
+    Token(IDsess, didR, 'GA', 'GB', exp, TokSig)
+
+    /* The MAC gives the essential confirmation property here. */
+  ]
+  --[ GA_Complete('GA','GB',didR,IDsess),
+      SessionEstablished('GA','GB',didR,IDsess,K)
+    ]->
+  [ !SessionKey('GA','GB',didR,IDsess,K) ]
+
+
+/* ============================================================================
+   PHASE 3 — SESSION COMMITMENT & REVOCATION
+   ----------------------------------------------------------------------------
+   Once established, a session can be publicly anchored on the ledger.
+   Revocation is modeled as a separate ledger event tied to the same session id.
+   ============================================================================ */
+
+/* Anchor an established session on the ledger.
+   This provides public accountability without revealing the session key itself,
+   since only a hash of Ksess is anchored.
+*/
+rule Anchor_Session:
+  [ !SessionKey(ga, gb, didR, IDsess, Ksess),
+    Fr(~tx)
+  ]
+  --[ SessionAnchored(IDsess, ~tx) ]->
+  [ !IOTA_Anchor('sess', IDsess, h(<IDsess, h(Ksess)>), ~tx) ]
+
+/* Revoke an established session.
+   The model assumes revocation is represented by an immutable ledger anchor.
+*/
+rule Revoke_Session:
+  [ !SessionKey(ga, gb, didR, IDsess, Ksess),
+    Fr(~tx)
+  ]
+  --[ SessionRevoked(IDsess, ~tx) ]->
+  [ !IOTA_Anchor('rev', IDsess, h(<IDsess,'revoked'>), ~tx) ]
+
+
+/* ============================================================================
+   COMPROMISE RULES
+   ----------------------------------------------------------------------------
+   These rules model compromise assumptions used in the lemmas.
+   ============================================================================ */
+
+/* Reveal Gateway B's long-term key to the adversary.
+   This is used to model gateway compromise and to verify split-trust/KCI
+   resilience properties.
+*/
+rule Reveal_GB_Ltk:
+  [ !Ltk('GB', skGB) ]
+  --[ RevealLtk('GB') ]->
+  [ Out(skGB) ]
+
+/* Optional SAC compromise rule.
+   If enabled, this can be used to demonstrate that many split-trust guarantees
+   no longer hold once SAC is compromised.
+*/
+/*
+rule Reveal_SAC_Ltk:
+  [ !Ltk('SAC', skSAC) ]
+  --[ RevealLtk('SAC') ]->
+  [ Out(skSAC) ]
+*/
+
+
+/* ============================================================================
+   SAC TOKEN ISSUANCE
+   ----------------------------------------------------------------------------
+   This rule models SAC issuance of a session-scoped capability / authorization
+   token. The token binds:
+   - session identifier IDsess
+   - registered identity didR
+   - communicating peers GA and GB
+   - ledger-bound context RIOTA
+   - expiration / validity parameter exp
+   ============================================================================ */
+
+rule SAC_Issue_Token:
+  [ SessionContext(didR, IDsess, Ssac, RIOTA),
+    !Ltk('SAC', skSAC),
+    Fr(~exp)
+  ]
+  --[ TokenIssued(IDsess, didR) ]->
+  [ Token(IDsess, didR, 'GA', 'GB', ~exp,
+      sign(<IDsess, didR, 'GA', 'GB', RIOTA, ~exp>, skSAC)) ]
+
+
+/* ============================================================================
+   SECURITY LEMMAS
+   ----------------------------------------------------------------------------
+   The following lemmas specify the security goals verified by Tamarin.
+   ============================================================================ */
+
+
+/* --------------------------------------------------------------------------
+   CORE AUTHENTICATION PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* Mutual authentication:
+   If GA completes a session with GB, then GB must have completed the matching
+   responder role earlier in the same session.
+*/
+lemma mutual_authentication:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+     ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j & #j < #i)"
+
+/* Aliveness:
+   If GA completes, then GB must at least have been alive and participated in
+   the protocol run.
+*/
+lemma aliveness:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j)"
+
+/* Injective agreement / replay resistance:
+   Two completion events for the same session identifier and peer tuple must in
+   fact be the same event, ruling out replayed completions.
+*/
+lemma injective_agreement:
+  "All did ids #i #j.
+     GA_Complete('GA','GB',did,ids) @ #i
+   & GA_Complete('GA','GB',did,ids) @ #j
+   ==> #i = #j"
+
+
+/* --------------------------------------------------------------------------
+   SESSION KEY PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* Session key secrecy:
+   If a session key is established, the adversary cannot learn it.
+*/
+lemma session_key_secrecy:
+  "All did ids k #i.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+     ==> not (Ex #t. K(k) @ #t)"
+
+/* Key agreement:
+   Any two established keys for the same session identifier must be equal.
+*/
+lemma key_agreement:
+  "All did ids k1 k2 #i #j.
+     SessionEstablished('GA','GB',did,ids,k1) @ #i
+   & SessionEstablished('GA','GB',did,ids,k2) @ #j
+   ==> k1 = k2"
+
+/* Key independence:
+   The same key cannot be reused across distinct session identifiers.
+*/
+lemma key_independence:
+  "All did ids1 ids2 k #i #j.
+     SessionEstablished('GA','GB',did,ids1,k) @ #i
+   & SessionEstablished('GA','GB',did,ids2,k) @ #j
+   ==> ids1 = ids2"
+
+
+/* --------------------------------------------------------------------------
+   UNKNOWN KEY-SHARE (UKS) RESISTANCE
+   -------------------------------------------------------------------------- */
+
+/* UKS resistance:
+   GA cannot be tricked into sharing the same key with some peer x other than GB.
+*/
+lemma uks_resistance:
+  "All did ids k x #i #j.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+   & SessionEstablished('GA',x,  did,ids,k) @ #j
+   ==> x = 'GB'"
+
+
+/* --------------------------------------------------------------------------
+   SESSION IDENTIFIER PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* Session ID uniqueness:
+   A session identifier issued by SAC is bound to a unique registered identity.
+*/
+lemma session_id_unique:
+  "All ids did1 did2 #i #j.
+     SessionIssued(ids, did1) @ #i
+   & SessionIssued(ids, did2) @ #j
+   ==> #i = #j"
+
+
+/* --------------------------------------------------------------------------
+   COMPROMISE AND FORWARD-SECURITY-LIKE PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* Forward-secrecy-like secrecy:
+   If GB is not compromised before session establishment, then the established
+   key remains secret.
+*/
+lemma forward_secrecy_like:
+  "All did ids k #i.
+     SessionEstablished('GA','GB',did,ids,k) @ #i
+   & not(Ex #t. RevealLtk('GB') @ #t & #t < #i)
+   ==> not(Ex #u. K(k) @ #u)"
+
+
+/* --------------------------------------------------------------------------
+   LEDGER ANCHORING PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* Anchor implies session:
+   A session anchor can only exist if a corresponding session was previously
+   established.
+*/
+lemma anchor_implies_session:
+  "All ids tx #i.
+     SessionAnchored(ids, tx) @ #i
+   ==> (Ex did k #j.
+          SessionEstablished('GA','GB',did,ids,k) @ #j
+        & #j < #i)"
+
+/* Revoke requires anchor:
+   A revocation event can only occur if the session was already anchored.
+*/
+lemma revoke_requires_anchor:
+  "All ids tx #i.
+     SessionRevoked(ids, tx) @ #i
+   ==> (Ex tx2 #j.
+          SessionAnchored(ids, tx2) @ #j & #j < #i)"
+
+
+/* --------------------------------------------------------------------------
+   SPLIT-TRUST / COMPROMISE-RESILIENCE PROPERTIES
+   -------------------------------------------------------------------------- */
+
+/* SAC token requirement:
+   Even if GB is compromised, GA can only complete if SAC has actually issued
+   the corresponding authorization token.
+*/
+lemma ga_complete_requires_sac_token_even_if_gb_compromised:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   ==> (Ex #j. TokenIssued(ids, did) @ #j & #j < #i)"
+
+/* KCI resilience under split trust:
+   Even if GB's long-term key is revealed, authentication still holds provided
+   SAC is not compromised.
+*/
+lemma mutual_authentication_resilient_to_gb_ltk_reveal:
+  "All did ids #i.
+     GA_Complete('GA','GB',did,ids) @ #i
+   & (Ex #t. RevealLtk('GB') @ #t & #t < #i)
+   & not(Ex #u. RevealLtk('SAC') @ #u & #u < #i)
+   ==> (Ex #j. GB_Complete('GB','GA',did,ids) @ #j & #j < #i)"
+
+
+end
