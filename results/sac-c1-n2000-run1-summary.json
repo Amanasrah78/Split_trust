@@ -1,0 +1,27 @@
+{
+  "client_latency": {
+    "max_ms": 5.063667,
+    "mean_ms": 1.216696542,
+    "median_ms": 1.1613544999999998,
+    "min_ms": 1.06625,
+    "p95_ms": 1.5718854,
+    "p99_ms": 2.0079921699999996
+  },
+  "concurrency": 1,
+  "failures": 0,
+  "mode": "sac",
+  "primary_latency": {
+    "max_ms": 1.946792,
+    "mean_ms": 0.7076069555000001,
+    "median_ms": 0.6795005000000001,
+    "min_ms": 0.609,
+    "p95_ms": 0.8928443500000001,
+    "p99_ms": 1.14254583
+  },
+  "primary_metric": "sac_total_processing_ns",
+  "requests": 2000,
+  "successes": 2000,
+  "test_elapsed_seconds": 2.46312671,
+  "throughput_successes_per_second": 811.9760919648344,
+  "warmup": 100
+}

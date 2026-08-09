@@ -1,0 +1,1 @@
+"""Gateway A service."""

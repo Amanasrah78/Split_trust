@@ -1,0 +1,53 @@
+% Generated from the final Docker testbed datasets.
+% Ledger finality is simulated and is intentionally omitted.
+
+\begin{table}[t]
+\centering
+\caption{Latency scopes at concurrency 1 over five trials of 1,000 measured sessions each.}
+\label{tab:docker-latency-scopes}
+\begin{tabular}{lcc}
+\hline
+\textbf{Metric} & \textbf{Mean $\pm$ 95\% CI (ms)} & \textbf{p95 $\pm$ 95\% CI (ms)} \\
+\hline
+Gateway cryptographic processing & 0.3223 $\pm$ 0.0137 & 0.4163 $\pm$ 0.0452 \\
+SAC authorization path & 1.3773 $\pm$ 0.0636 & 1.8394 $\pm$ 0.2661 \\
+Authorization-to-usable-session E2E & 2.1684 $\pm$ 0.0939 & 2.8499 $\pm$ 0.3801 \\
+Post-usability ledger enqueue & 0.5629 $\pm$ 0.0238 & 0.7265 $\pm$ 0.0961 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{SAC-inclusive E2E scalability over five repeated trials per concurrency level.}
+\label{tab:docker-e2e-scalability}
+\begin{tabular}{rccc}
+\hline
+\textbf{Concurrency} & \textbf{Throughput (s$^{-1}$)} & \textbf{Mean E2E (ms)} & \textbf{p95 E2E (ms)} \\
+\hline
+1 & 298.43 $\pm$ 13.35 & 2.168 $\pm$ 0.094 & 2.850 $\pm$ 0.380 \\
+5 & 512.64 $\pm$ 19.22 & 6.256 $\pm$ 0.235 & 9.663 $\pm$ 0.577 \\
+10 & 447.60 $\pm$ 15.66 & 14.481 $\pm$ 0.472 & 22.158 $\pm$ 1.617 \\
+25 & 360.35 $\pm$ 21.36 & 44.152 $\pm$ 2.457 & 87.697 $\pm$ 5.752 \\
+50 & 426.59 $\pm$ 22.74 & 71.803 $\pm$ 4.077 & 97.203 $\pm$ 5.731 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\caption{SAC authorization scalability over five trials of 2,000 measured requests per concurrency level.}
+\label{tab:docker-sac-scalability}
+\begin{tabular}{rccc}
+\hline
+\textbf{Concurrency} & \textbf{Throughput (s$^{-1}$)} & \textbf{Client mean (ms)} & \textbf{Client p95 (ms)} \\
+\hline
+1 & 810.10 $\pm$ 12.82 & 1.220 $\pm$ 0.020 & 1.586 $\pm$ 0.065 \\
+5 & 1365.14 $\pm$ 17.15 & 3.600 $\pm$ 0.045 & 5.799 $\pm$ 0.190 \\
+10 & 1134.59 $\pm$ 27.00 & 8.738 $\pm$ 0.207 & 19.615 $\pm$ 0.428 \\
+25 & 825.82 $\pm$ 13.72 & 29.798 $\pm$ 0.390 & 72.803 $\pm$ 2.508 \\
+50 & 723.39 $\pm$ 174.59 & 69.984 $\pm$ 17.469 & 195.916 $\pm$ 71.451 \\
+100 & 345.37 $\pm$ 26.19 & 284.096 $\pm$ 20.881 & 981.655 $\pm$ 144.247 \\
+\hline
+\end{tabular}
+\end{table}
