@@ -57,6 +57,11 @@ It is not an E2E wall-clock interval.
 
 The current Docker experiments use `LEDGER_MODE=simulated`. Simulated finality validates off-path execution only and is not a live IOTA or Shimmer result.
 
+`LEDGER_MODE=iota` adds an asynchronous current-IOTA testnet backend. It uses
+the included Move event package, records transaction submission and
+checkpoint-confirmation measurements, and remains outside `e2e_ns`. See
+[`docs/experiments-b-c.md`](docs/experiments-b-c.md) for funded testnet setup.
+
 ## Repeated concurrency-1 results
 
 Five trials were run. Each contained 1,000 measured sessions after 100 warm-ups.
@@ -106,6 +111,18 @@ Run SAC trials:
 
     ./scripts/run_sac_repeated.sh
     python3 scripts/aggregate_repeated.py sac
+
+Run the controlled network-delay matrix (Experiment B):
+
+    ./scripts/run_delay_matrix.sh
+
+Run one 5 ms smoke trial:
+
+    DELAYS=5 TRIALS=1 WARMUP=2 REQUESTS=10 ./scripts/run_delay_matrix.sh
+
+Run with the live IOTA test-network backend (Experiment C, after setup):
+
+    docker compose -f compose.yaml -f compose.iota.yaml up -d --build --wait
 
 ## Result files
 

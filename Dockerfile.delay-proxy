@@ -1,0 +1,7 @@
+FROM alpine:3.22.1
+
+RUN apk add --no-cache iproute2 socat
+
+COPY scripts/delay_proxy_entrypoint.sh /usr/local/bin/delay-proxy
+
+ENTRYPOINT ["/usr/local/bin/delay-proxy"]
