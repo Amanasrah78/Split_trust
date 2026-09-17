@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI, HTTPException, status
 
+from .backends import IotaBackend
+
 from shared.splittrust.encoding import b64decode
 from shared.splittrust.models import (
     LedgerCommitAccepted,
@@ -25,12 +27,16 @@ SIMULATED_FINALITY_MS = int(
 WORKER_COUNT = int(os.getenv("LEDGER_WORKER_COUNT", "64"))
 LEDGER_EPOCH_DIGEST_B64 = os.environ["LEDGER_EPOCH_DIGEST_B64"]
 
+if LEDGER_MODE not in {"simulated", "iota"}:
+    raise RuntimeError("LEDGER_MODE must be 'simulated' or 'iota'")
+
 if len(b64decode(LEDGER_EPOCH_DIGEST_B64)) != 32:
     raise RuntimeError("LEDGER_EPOCH_DIGEST_B64 must decode to 32 bytes")
 
 queue: asyncio.Queue[tuple[str, LedgerCommitRequest]] = asyncio.Queue()
 records: dict[str, LedgerCommitStatus] = {}
 started_ns: dict[str, int] = {}
+iota_backend: IotaBackend | None = None
 
 
 async def commitment_worker() -> None:
@@ -41,12 +47,28 @@ async def commitment_worker() -> None:
             record = records[job_id]
             record.status = "submitting"
 
-            if LEDGER_MODE != "simulated":
-                raise RuntimeError(
-                    f"Ledger mode {LEDGER_MODE!r} is not implemented yet"
-                )
+            if LEDGER_MODE == "simulated":
+                await asyncio.sleep(SIMULATED_FINALITY_MS / 1000)
+                record.lookup_status = "simulated"
+            else:
+                assert iota_backend is not None
 
-            await asyncio.sleep(SIMULATED_FINALITY_MS / 1000)
+                def submitted(identifier: str, latency_ns: int) -> None:
+                    record.status = "confirming"
+                    record.ledger_identifier = identifier
+                    record.submit_latency_ns = latency_ns
+
+                result = await iota_backend.submit(
+                    b64decode(request.commitment_b64),
+                    request.session_id,
+                    on_submitted=submitted,
+                )
+                record.submit_latency_ns = result.submit_latency_ns
+                record.confirmation_latency_ns = (
+                    result.confirmation_latency_ns
+                )
+                record.ledger_identifier = result.identifier
+                record.lookup_status = result.lookup_status
 
             confirmed_at = wall_clock_ns()
             record.status = "confirmed"
@@ -60,6 +82,10 @@ async def commitment_worker() -> None:
                 job_id=job_id,
                 session_id=request.session_id,
                 ledger_final_ns=record.ledger_final_ns,
+                submit_latency_ns=record.submit_latency_ns,
+                confirmation_latency_ns=record.confirmation_latency_ns,
+                ledger_identifier=record.ledger_identifier,
+                lookup_status=record.lookup_status,
                 session_usable_wall_clock_ns=(
                     request.session_usable_wall_clock_ns
                 ),
@@ -67,6 +93,14 @@ async def commitment_worker() -> None:
         except Exception as exc:
             record = records[job_id]
             record.status = "failed"
+            record.ledger_final_ns = monotonic_ns() - started_ns[job_id]
+            record.confirmation_latency_ns = getattr(
+                exc, "confirmation_latency_ns", record.confirmation_latency_ns
+            )
+            record.lookup_status = getattr(
+                exc, "lookup_status", record.lookup_status
+            )
+            record.failure_kind = type(exc).__name__
             record.error = str(exc)
 
             log_event(
@@ -75,6 +109,9 @@ async def commitment_worker() -> None:
                 request.trace_id,
                 job_id=job_id,
                 session_id=request.session_id,
+                ledger_final_ns=record.ledger_final_ns,
+                ledger_identifier=record.ledger_identifier,
+                lookup_status=record.lookup_status,
                 error=str(exc),
             )
         finally:
@@ -83,6 +120,9 @@ async def commitment_worker() -> None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global iota_backend
+    if LEDGER_MODE == "iota":
+        iota_backend = IotaBackend.from_environment()
     workers = [
         asyncio.create_task(commitment_worker())
         for _ in range(WORKER_COUNT)

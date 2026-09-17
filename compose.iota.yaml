@@ -1,0 +1,22 @@
+services:
+  ledger-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile.iota-ledger
+    image: split-trust-iota-ledger:local
+    environment:
+      LEDGER_MODE: iota
+      LEDGER_WORKER_COUNT: ${IOTA_LEDGER_WORKER_COUNT:-1}
+      IOTA_RPC_URL: ${IOTA_RPC_URL:-https://api.testnet.iota.cafe}
+      IOTA_PACKAGE_ID: ${IOTA_PACKAGE_ID:?publish the commitment package first}
+      IOTA_CLI_PATH: /usr/local/bin/iota
+      IOTA_MOVE_MODULE: ${IOTA_MOVE_MODULE:-commitment_registry}
+      IOTA_MOVE_FUNCTION: ${IOTA_MOVE_FUNCTION:-submit}
+      IOTA_GAS_BUDGET: ${IOTA_GAS_BUDGET:-10000000}
+      IOTA_COMMITMENT_TAG_HEX: ${IOTA_COMMITMENT_TAG_HEX:-73706c69742d74727573742d76310000}
+      IOTA_POLL_INTERVAL_SECONDS: ${IOTA_POLL_INTERVAL_SECONDS:-1}
+      IOTA_SUBMIT_TIMEOUT_SECONDS: ${IOTA_SUBMIT_TIMEOUT_SECONDS:-60}
+      IOTA_CONFIRMATION_TIMEOUT_SECONDS: ${IOTA_CONFIRMATION_TIMEOUT_SECONDS:-60}
+    volumes:
+      - ${IOTA_CLI_BINARY:?path to a Linux IOTA CLI binary}:/usr/local/bin/iota:ro
+      - ${IOTA_CLIENT_CONFIG_DIR:?path to an initialized IOTA client directory}:/root/.iota:ro

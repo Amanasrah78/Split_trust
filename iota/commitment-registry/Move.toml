@@ -1,0 +1,9 @@
+[package]
+name = "split_trust_commitments"
+edition = "2024"
+
+[dependencies]
+Iota = { git = "https://github.com/iotaledger/iota.git", subdir = "crates/iota-framework/packages/iota-framework", rev = "framework/testnet" }
+
+[addresses]
+split_trust_commitments = "0x0"

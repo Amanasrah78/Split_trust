@@ -55,7 +55,19 @@ It is not an E2E wall-clock interval.
 
 `ledger_enqueue_ns` begins after the session becomes usable. `ledger_final_ns` is measured independently by the ledger adapter.
 
-The current Docker experiments use `LEDGER_MODE=simulated`. Simulated finality validates off-path execution only and is not a live IOTA or Shimmer result.
+The baseline `compose.yaml` intentionally uses `LEDGER_MODE=simulated` so
+Experiment A and the delay matrix remain reproducible without credentials.
+This is not the only available backend.
+
+`LEDGER_MODE=iota` adds an asynchronous current-IOTA testnet backend. It uses
+the included Move event package, records transaction submission and
+checkpoint-confirmation measurements, and remains outside `e2e_ns`. See
+[`docs/experiments-b-c.md`](docs/experiments-b-c.md) for funded testnet setup.
+
+Experiment C was exercised successfully against the current IOTA testnet after
+publishing the included package. Use `compose.iota.yaml` to select that live
+backend; it changes the ledger adapter to `LEDGER_MODE=iota` while leaving the
+baseline compose file unchanged.
 
 ## Repeated concurrency-1 results
 
@@ -106,6 +118,18 @@ Run SAC trials:
 
     ./scripts/run_sac_repeated.sh
     python3 scripts/aggregate_repeated.py sac
+
+Run the controlled network-delay matrix (Experiment B):
+
+    ./scripts/run_delay_matrix.sh
+
+Run one 5 ms smoke trial:
+
+    DELAYS=5 TRIALS=1 WARMUP=2 REQUESTS=10 ./scripts/run_delay_matrix.sh
+
+Run with the live IOTA test-network backend (Experiment C, after setup):
+
+    docker compose -f compose.yaml -f compose.iota.yaml up -d --build --wait
 
 ## Result files
 

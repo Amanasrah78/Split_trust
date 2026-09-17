@@ -1,0 +1,63 @@
+services:
+  delay-a-sac:
+    build:
+      context: .
+      dockerfile: Dockerfile.delay-proxy
+    image: split-trust-delay-proxy:local
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DELAY_MS: ${DELAY_MS:?set DELAY_MS to the one-way delay}
+      UPSTREAM_HOST: sac
+      UPSTREAM_PORT: "8000"
+    networks:
+      - split-trust
+    restart: unless-stopped
+
+  delay-sac-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.delay-proxy
+    image: split-trust-delay-proxy:local
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DELAY_MS: ${DELAY_MS:?set DELAY_MS to the one-way delay}
+      UPSTREAM_HOST: gateway-b
+      UPSTREAM_PORT: "8000"
+    networks:
+      - split-trust
+    restart: unless-stopped
+
+  delay-a-b:
+    build:
+      context: .
+      dockerfile: Dockerfile.delay-proxy
+    image: split-trust-delay-proxy:local
+    cap_add:
+      - NET_ADMIN
+    environment:
+      DELAY_MS: ${DELAY_MS:?set DELAY_MS to the one-way delay}
+      UPSTREAM_HOST: gateway-b
+      UPSTREAM_PORT: "8000"
+    networks:
+      - split-trust
+    restart: unless-stopped
+
+  gateway-a:
+    environment:
+      SAC_URL: http://delay-a-sac:8000
+      GATEWAY_B_URL: http://delay-a-b:8000
+    depends_on:
+      delay-a-sac:
+        condition: service_started
+      delay-a-b:
+        condition: service_started
+
+  sac:
+    environment:
+      GATEWAY_B_URL: http://delay-sac-b:8000
+    depends_on:
+      delay-sac-b:
+        condition: service_started
+
