@@ -1,5 +1,9 @@
 services:
   ledger-adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile.iota-ledger
+    image: split-trust-iota-ledger:local
     environment:
       LEDGER_MODE: iota
       LEDGER_WORKER_COUNT: ${IOTA_LEDGER_WORKER_COUNT:-1}
@@ -16,4 +20,3 @@ services:
     volumes:
       - ${IOTA_CLI_BINARY:?path to a Linux IOTA CLI binary}:/usr/local/bin/iota:ro
       - ${IOTA_CLIENT_CONFIG_DIR:?path to an initialized IOTA client directory}:/root/.iota:ro
-
