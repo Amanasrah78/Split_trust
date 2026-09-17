@@ -55,12 +55,19 @@ It is not an E2E wall-clock interval.
 
 `ledger_enqueue_ns` begins after the session becomes usable. `ledger_final_ns` is measured independently by the ledger adapter.
 
-The current Docker experiments use `LEDGER_MODE=simulated`. Simulated finality validates off-path execution only and is not a live IOTA or Shimmer result.
+The baseline `compose.yaml` intentionally uses `LEDGER_MODE=simulated` so
+Experiment A and the delay matrix remain reproducible without credentials.
+This is not the only available backend.
 
 `LEDGER_MODE=iota` adds an asynchronous current-IOTA testnet backend. It uses
 the included Move event package, records transaction submission and
 checkpoint-confirmation measurements, and remains outside `e2e_ns`. See
 [`docs/experiments-b-c.md`](docs/experiments-b-c.md) for funded testnet setup.
+
+Experiment C was exercised successfully against the current IOTA testnet after
+publishing the included package. Use `compose.iota.yaml` to select that live
+backend; it changes the ledger adapter to `LEDGER_MODE=iota` while leaving the
+baseline compose file unchanged.
 
 ## Repeated concurrency-1 results
 
