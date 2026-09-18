@@ -131,6 +131,17 @@ Run with the live IOTA test-network backend (Experiment C, after setup):
 
     docker compose -f compose.yaml -f compose.iota.yaml up -d --build --wait
 
+Run the SAC outage/recovery availability experiment:
+
+    ./scripts/run_sac_outage_recovery.sh
+
+This establishes one session before stopping the SAC, verifies that new
+sessions fail closed while the SAC is unavailable, and verifies that new
+sessions recover after the SAC is restarted. The output is written to
+`results/sac-outage-recovery-summary.json`. The current API does not expose a
+data-plane operation after establishment, so this experiment does not measure
+application traffic on an already established session.
+
 ## Result files
 
 - `results/environment.txt`
@@ -140,6 +151,9 @@ Run with the live IOTA test-network backend (Experiment C, after setup):
 - `results/sac-repeated-aggregate.csv`
 - Per-request JSONL datasets.
 - Per-trial JSON summaries.
+- `results/public-baseline-comparison.md` documents public PQ-handshake and
+  IIoT identity implementations that can be used as scoped comparison
+  references.
 
 ## Interpretation constraints
 
