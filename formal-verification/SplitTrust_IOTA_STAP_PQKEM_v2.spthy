@@ -1,0 +1,1561 @@
+/*
+===============================================================================
+SplitTrust_IOTA_STAP_PQKEM_v2
+===============================================================================
+
+Main changes from the previous model:
+1. SessionContext and reusable protocol state are persistent.
+2. Added explicit executability lemmas.
+3. Token verification uses the SAC signature.
+4. Gateway A signs the KEM initiation message.
+5. Gateway B verifies GA's signature.
+6. Reciprocal key confirmation uses TagB and TagA.
+7. Direction-separation labels dirB and dirA are included.
+8. Session-key KDF matches the manuscript context:
+      Z, Ssac, AuthS, RIOTA, IDsess, GA, GB, Pseud
+9. Ledger anchors are publicly observable.
+10. Revocation requires a previous session anchor.
+11. Gateway signing-key compromise and KEM-key compromise are separated.
+12. SAC session-state disclosure is modeled separately from SAC signing-key
+    compromise.
+13. KCI means compromise of GA's own long-term authentication key while
+    testing whether GB can still be impersonated to GA.
+14. The previous forward-secrecy-like lemma is removed.
+===============================================================================
+*/
+
+theory SplitTrust_IOTA_STAP_PQKEM_v2
+
+begin
+
+builtins: signing, hashing, asymmetric-encryption
+functions: kdf/1, view/1, mac/2
+
+
+/* ============================================================================
+   RESTRICTIONS
+   ============================================================================ */
+
+/*
+Verification checks are represented by Eq(..., true).
+*/
+restriction Equality:
+  "All x y #i.
+     Eq(x,y) @ #i
+     ==> x = y"
+
+
+/*
+The long-term setup rule must occur only once.
+*/
+restriction SetupOnce:
+  "All #i #j.
+     Setup('system') @ #i
+   & Setup('system') @ #j
+   ==> #i = #j"
+
+
+/* ============================================================================
+   LONG-TERM SETUP
+   ----------------------------------------------------------------------------
+   Three gateways are instantiated:
+      GA and GB are used by the target protocol run.
+      GX provides an additional peer identity so peer-binding/UKS properties
+      are not defined only over hard-coded GA/GB event parameters.
+
+   Each gateway has separate:
+      - signing key
+      - KEM/decapsulation key
+
+   The KEM is abstracted symbolically using asymmetric encryption:
+      CT = aenc(Z, pkKemGB)
+
+   This models the essential secrecy/decapsulation relationship without
+   claiming computational verification of ML-KEM itself.
+   ============================================================================ */
+
+rule Init_LongTermKeys:
+  [
+    Fr(~skSAC),
+
+    Fr(~skSigGA), Fr(~skKemGA),
+    Fr(~skSigGB), Fr(~skKemGB),
+    Fr(~skSigGX), Fr(~skKemGX)
+  ]
+  --[
+    Setup('system')
+  ]->
+  [
+    !SACLtk(~skSAC),
+    !SACPk(pk(~skSAC)),
+
+    !SigLtk('GA', ~skSigGA),
+    !SigPk('GA', pk(~skSigGA)),
+    !KemLtk('GA', ~skKemGA),
+    !KemPk('GA', pk(~skKemGA)),
+
+    !SigLtk('GB', ~skSigGB),
+    !SigPk('GB', pk(~skSigGB)),
+    !KemLtk('GB', ~skKemGB),
+    !KemPk('GB', pk(~skKemGB)),
+
+    !SigLtk('GX', ~skSigGX),
+    !SigPk('GX', pk(~skSigGX)),
+    !KemLtk('GX', ~skKemGX),
+    !KemPk('GX', pk(~skKemGX)),
+
+    !AllowedPair('GA', 'GB'),
+
+    Out(pk(~skSAC)),
+
+    Out(pk(~skSigGA)),
+    Out(pk(~skKemGA)),
+
+    Out(pk(~skSigGB)),
+    Out(pk(~skKemGB)),
+
+    Out(pk(~skSigGX)),
+    Out(pk(~skKemGX))
+  ]
+
+
+/* ============================================================================
+   PHASE 0 — DID AND VC ANCHORING
+   ============================================================================ */
+
+rule Anchor_DID:
+  [
+    Fr(~did),
+    Fr(~root),
+    Fr(~doc),
+    Fr(~tx)
+  ]
+  --[
+    DIDAnchored(~did, ~tx)
+  ]->
+  [
+    !DID(~did),
+    !PseudoRoot(~did, ~root),
+
+    !IOTA_Anchor('did', ~did, h(~doc), ~tx),
+
+    Out(~did),
+    Out(< 'ledger', 'did', ~did, h(~doc), ~tx >)
+  ]
+
+
+rule Issue_VC:
+  [
+    !DID(didR),
+    Fr(~exp),
+    Fr(~tx)
+  ]
+  --[
+    VCAnchored(didR, ~tx)
+  ]->
+  [
+    !VC(didR, ~exp),
+
+    !IOTA_Anchor(
+        'vc',
+        didR,
+        h(<didR, ~exp>),
+        ~tx
+    ),
+
+    Out(
+        < 'ledger',
+          'vc',
+          didR,
+          h(<didR, ~exp>),
+          ~tx >
+    )
+  ]
+
+
+/* ============================================================================
+   PHASE 1 — DEVICE/GATEWAY REGISTRATION
+   ============================================================================ */
+
+rule Register_Device:
+  [
+    !VC(didR, exp),
+    !SigPk(gb, pkGB),
+    Fr(~tx)
+  ]
+  --[
+    RegCompleted(didR, gb, ~tx)
+  ]->
+  [
+    !Registration(didR, gb, ~tx),
+
+    !IOTA_Anchor(
+        'reg',
+        didR,
+        h(<didR, gb>),
+        ~tx
+    ),
+
+    Out(
+        < 'ledger',
+          'reg',
+          didR,
+          gb,
+          h(<didR, gb>),
+          ~tx >
+    )
+  ]
+
+
+/* ============================================================================
+   PHASE 2 — SESSION CONTEXT
+   ----------------------------------------------------------------------------
+   RIOTA is deliberately public.
+   The pseudonym is session specific.
+   ============================================================================ */
+
+rule SAC_Issue_SessionContext:
+  let
+    RIOTA =
+      h(<~IDsess, view(<~Sigma, ~IDsess>)>)
+
+    Pseud =
+      h(<rootR, ~saltR, ~IDsess>)
+
+    Csalt =
+      h(<~IDsess, ~Ssac>)
+  in
+  [
+    !AllowedPair(ga, gb),
+
+    !Registration(didR, gb, txReg),
+    !SigPk(ga, pkGA),
+    !KemPk(gb, pkKemGB),
+    !PseudoRoot(didR, rootR),
+
+    Fr(~IDsess),
+    Fr(~Ssac),
+    Fr(~Sigma),
+    Fr(~saltR),
+    Fr(~txSalt)
+  ]
+  --[
+    SessionIssued(~IDsess, didR, ga, gb),
+    LedgerFreshnessCreated(~IDsess, RIOTA)
+  ]->
+  [
+    !SessionContext(
+        didR,
+        ~IDsess,
+        ga,
+        gb,
+        Pseud,
+        ~Ssac,
+        RIOTA
+    ),
+
+    NeedAuthSecret(~IDsess),
+    NeedToken(~IDsess),
+
+    !IOTA_Anchor(
+        'salt',
+        ~IDsess,
+        Csalt,
+        ~txSalt
+    ),
+
+    Out(
+        < 'ledger',
+          'salt',
+          ~IDsess,
+          Csalt,
+          ~txSalt >
+    ),
+
+    /*
+    RIOTA is public freshness/context information,
+    not secret key material.
+    */
+    Out(
+        < 'ledger_view',
+          ~IDsess,
+          RIOTA >
+    ),
+
+    /*
+    The session pseudonym is observable during the protocol.
+    */
+    Out(Pseud)
+  ]
+
+
+/* ============================================================================
+   SAC CONFIDENTIAL AUTHORIZATION INPUT
+   ============================================================================ */
+
+rule SAC_Issue_AuthSecret:
+  [
+    !SessionContext(
+        didR,
+        IDsess,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA
+    ),
+
+    NeedAuthSecret(IDsess),
+
+    Fr(~AuthS)
+  ]
+  --[
+    AuthSecretIssued(IDsess, didR)
+  ]->
+  [
+    !AuthSecret(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        ~AuthS
+    )
+  ]
+
+
+/* ============================================================================
+   SAC CAPABILITY TOKEN
+   ----------------------------------------------------------------------------
+   The token is transmitted publicly but signed by the SAC.
+   Gateways verify the signature rather than relying on an inaccessible
+   internal Token fact.
+   ============================================================================ */
+
+rule SAC_Issue_Token:
+  let
+    TokMsg =
+      < IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        RIOTA,
+        'cmd',
+        ~exp >
+
+    TokSig =
+      sign(TokMsg, skSAC)
+  in
+  [
+    !SessionContext(
+        didR,
+        IDsess,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA
+    ),
+
+    !AuthSecret(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        AuthS
+    ),
+
+    NeedToken(IDsess),
+
+    !SACLtk(skSAC),
+
+    Fr(~exp)
+  ]
+  --[
+    TokenIssued(
+        IDsess,
+        didR,
+        ga,
+        gb
+    )
+  ]->
+  [
+    Out(
+        < 'token',
+          TokMsg,
+          TokSig >
+    ),
+
+    /*
+    Prevent more than one honest GA-start event for
+    the same SAC-issued session context.
+    */
+    StartPermit(IDsess)
+  ]
+
+
+/* ============================================================================
+   GATEWAY A — KEM INITIATION
+   ----------------------------------------------------------------------------
+   GA:
+     - verifies the SAC token;
+     - samples KEM shared secret Z;
+     - encapsulates Z to GB;
+     - creates nonce nA;
+     - signs the initiation message.
+   ============================================================================ */
+
+rule GA_Start_Session_PQKEM:
+  let
+    TokMsg =
+      < IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        RIOTA,
+        'cmd',
+        exp >
+
+    CT =
+      aenc(~Z, pkKemGB)
+
+    InitMsg =
+      < 'ga_kem',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        CT,
+        ~nA,
+        TokSig,
+        exp >
+
+    SigA =
+      sign(InitMsg, skGA)
+  in
+  [
+    !SessionContext(
+        didR,
+        IDsess,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA
+    ),
+
+    !AuthSecret(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        AuthS
+    ),
+
+    StartPermit(IDsess),
+
+    !KemPk(gb, pkKemGB),
+    !SigLtk(ga, skGA),
+    !SACPk(pkSAC),
+
+    In(
+      < 'token',
+        TokMsg,
+        TokSig >
+    ),
+
+    Fr(~Z),
+    Fr(~nA)
+  ]
+  --[
+    Eq(
+      verify(
+        TokSig,
+        TokMsg,
+        pkSAC
+      ),
+      true
+    ),
+
+    GA_Start(
+        ga,
+        gb,
+        didR,
+        IDsess
+    )
+  ]->
+  [
+    Out(
+      < InitMsg,
+        SigA >
+    ),
+
+    St_GA(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA,
+        AuthS,
+        ~Z,
+        ~nA,
+        CT,
+        TokSig,
+        exp
+    )
+  ]
+
+
+/* ============================================================================
+   GATEWAY B — RESPONSE AND TAG_B
+   ----------------------------------------------------------------------------
+   The KDF now follows the manuscript:
+      Z || Ssac || AuthS || RIOTA ||
+      IDsess || GA || GB || Pseud
+
+   nA/nB are used in key confirmation, not as KDF inputs.
+   ============================================================================ */
+
+rule GB_Respond_Session_PQKEM:
+  let
+    TokMsg =
+      < IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        RIOTA,
+        'cmd',
+        exp >
+
+    CT =
+      aenc(Z, pk(skKemGB))
+
+    InitMsg =
+      < 'ga_kem',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        CT,
+        nA,
+        TokSig,
+        exp >
+
+    K =
+      kdf(
+        < Z,
+          Ssac,
+          AuthS,
+          RIOTA,
+          IDsess,
+          ga,
+          gb,
+          Pseud >
+      )
+
+    TagB =
+      mac(
+        < IDsess,
+          nA,
+          ~nB,
+          CT,
+          AuthS,
+          'dirB' >,
+        K
+      )
+
+    RespCore =
+      < 'gb_resp',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        ~nB,
+        CT,
+        TokSig,
+        exp,
+        TagB >
+
+    SigB =
+      sign(RespCore, skGB)
+  in
+  [
+    In(
+      < InitMsg,
+        SigA >
+    ),
+
+    !SessionContext(
+        didR,
+        IDsess,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA
+    ),
+
+    !AuthSecret(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        AuthS
+    ),
+
+    !KemLtk(gb, skKemGB),
+
+    !SigPk(ga, pkGA),
+    !SigLtk(gb, skGB),
+
+    !SACPk(pkSAC),
+
+    Fr(~nB)
+  ]
+  --[
+    Eq(
+      verify(
+        TokSig,
+        TokMsg,
+        pkSAC
+      ),
+      true
+    ),
+
+    Eq(
+      verify(
+        SigA,
+        InitMsg,
+        pkGA
+      ),
+      true
+    ),
+
+    GB_Response(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        K
+    )
+  ]->
+  [
+    Out(
+      < RespCore,
+        SigB >
+    ),
+
+    St_GB(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        AuthS,
+        K,
+        nA,
+        ~nB,
+        CT
+    )
+  ]
+
+
+/* ============================================================================
+   GATEWAY A — VERIFY TAG_B AND RETURN TAG_A
+   ============================================================================ */
+
+rule GA_Confirm_Session:
+  let
+    K =
+      kdf(
+        < Z,
+          Ssac,
+          AuthS,
+          RIOTA,
+          IDsess,
+          ga,
+          gb,
+          Pseud >
+      )
+
+    TagB =
+      mac(
+        < IDsess,
+          nA,
+          nB,
+          CT,
+          AuthS,
+          'dirB' >,
+        K
+      )
+
+    RespCore =
+      < 'gb_resp',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        nB,
+        CT,
+        TokSig,
+        exp,
+        TagB >
+
+    TagA =
+      mac(
+        < IDsess,
+          nA,
+          nB,
+          CT,
+          AuthS,
+          'dirA' >,
+        K
+      )
+  in
+  [
+    St_GA(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA,
+        AuthS,
+        Z,
+        nA,
+        CT,
+        TokSig,
+        exp
+    ),
+
+    !SigPk(gb, pkGB),
+
+    In(
+      < RespCore,
+        SigB >
+    )
+  ]
+  --[
+    Eq(
+      verify(
+        SigB,
+        RespCore,
+        pkGB
+      ),
+      true
+    ),
+
+    GA_Complete(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        K
+    )
+  ]->
+  [
+    Out(
+      < 'ga_confirm',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        nA,
+        nB,
+        CT,
+        TagA >
+    ),
+
+    !SessionKeyGA(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        K
+    )
+  ]
+
+
+/* ============================================================================
+   GATEWAY B — VERIFY TAG_A
+   ----------------------------------------------------------------------------
+   The session is fully established only after reciprocal key confirmation.
+   ============================================================================ */
+
+rule GB_Finish_Session:
+  let
+    TagA =
+      mac(
+        < IDsess,
+          nA,
+          nB,
+          CT,
+          AuthS,
+          'dirA' >,
+        K
+      )
+  in
+  [
+    St_GB(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        AuthS,
+        K,
+        nA,
+        nB,
+        CT
+    ),
+
+    In(
+      < 'ga_confirm',
+        IDsess,
+        didR,
+        ga,
+        gb,
+        Pseud,
+        nA,
+        nB,
+        CT,
+        TagA >
+    )
+  ]
+  --[
+    GB_Complete(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        K
+    ),
+
+    SessionEstablished(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        K
+    )
+  ]->
+  [
+    !SessionKey(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        Pseud,
+        K
+    )
+  ]
+
+
+/* ============================================================================
+   PHASE 3 — SESSION COMMITMENT
+   ============================================================================ */
+
+rule Anchor_Session:
+  let
+    Csess =
+      h(
+        < IDsess,
+          ga,
+          gb,
+          Pseud,
+          h(Ksess),
+          ~Tsess >
+      )
+  in
+  [
+    !SessionKey(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        Pseud,
+        Ksess
+    ),
+
+    Fr(~Tsess),
+    Fr(~tx)
+  ]
+  --[
+    SessionAnchored(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        ~tx
+    )
+  ]->
+  [
+    !SessionAnchor(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        Pseud,
+        Csess,
+        ~tx
+    ),
+
+    !IOTA_Anchor(
+        'sess',
+        IDsess,
+        Csess,
+        ~tx
+    ),
+
+    Out(
+      < 'ledger',
+        'sess',
+        IDsess,
+        Csess,
+        ~tx >
+    )
+  ]
+
+
+/* ============================================================================
+   PHASE 3 — REVOCATION
+   ----------------------------------------------------------------------------
+   The session must already be anchored before revocation.
+   ============================================================================ */
+
+rule Revoke_Session:
+  let
+    Crev =
+      h(
+        < IDsess,
+          Pseud,
+          txSess,
+          ~CtxTerm,
+          ~Trev >
+      )
+  in
+  [
+    !SessionAnchor(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        Pseud,
+        Csess,
+        txSess
+    ),
+
+    Fr(~CtxTerm),
+    Fr(~Trev),
+    Fr(~txRev)
+  ]
+  --[
+    SessionRevoked(
+        ga,
+        gb,
+        didR,
+        IDsess,
+        ~txRev
+    )
+  ]->
+  [
+    !IOTA_Anchor(
+        'rev',
+        IDsess,
+        Crev,
+        ~txRev
+    ),
+
+    Out(
+      < 'ledger',
+        'rev',
+        IDsess,
+        Crev,
+        ~txRev >
+    )
+  ]
+
+
+/* ============================================================================
+   COMPROMISE RULES
+   ============================================================================ */
+
+/*
+Gateway authentication/signing-key compromise.
+*/
+rule Reveal_Gateway_Signing_Key:
+  [
+    !SigLtk(g, skG)
+  ]
+  --[
+    RevealSigLtk(g)
+  ]->
+  [
+    Out(skG)
+  ]
+
+
+/*
+Gateway KEM-decapsulation-key compromise.
+This is deliberately separate from signing-key compromise.
+*/
+rule Reveal_Gateway_KEM_Key:
+  [
+    !KemLtk(g, skKem)
+  ]
+  --[
+    RevealKemLtk(g)
+  ]->
+  [
+    Out(skKem)
+  ]
+
+
+/*
+SAC signing-key compromise.
+Authorization integrity is not claimed after this event.
+*/
+rule Reveal_SAC_Signing_Key:
+  [
+    !SACLtk(skSAC)
+  ]
+  --[
+    RevealSACLtk('SAC')
+  ]->
+  [
+    Out(skSAC)
+  ]
+
+
+/*
+Disclosure of SAC-controlled state for a specific session.
+
+This models the split-trust secrecy question:
+does knowledge of SAC-side session material reveal Ksess?
+
+It reveals:
+  - Ssac
+  - AuthS
+  - RIOTA
+  - pseudonym root material
+
+It does NOT reveal the gateway-held KEM secret Z.
+*/
+rule Reveal_SAC_Session_State:
+  [
+    !SessionContext(
+        didR,
+        IDsess,
+        ga,
+        gb,
+        Pseud,
+        Ssac,
+        RIOTA
+    ),
+
+    !AuthSecret(
+        IDsess,
+        didR,
+        ga,
+        gb,
+        AuthS
+    ),
+
+    !PseudoRoot(
+        didR,
+        rootR
+    )
+  ]
+  --[
+    RevealSACState(IDsess)
+  ]->
+  [
+    Out(
+      < Ssac,
+        AuthS,
+        RIOTA,
+        rootR >
+    )
+  ]
+
+
+/* ============================================================================
+   EXECUTABILITY / NON-VACUITY
+   ============================================================================ */
+
+lemma executable_to_ga_start:
+  exists-trace
+  "Ex did ids #i.
+     GA_Start('GA','GB',did,ids) @ #i"
+
+lemma executable_to_gb_response:
+  exists-trace
+  "Ex did ids k #i.
+     GB_Response('GA','GB',did,ids,k) @ #i"
+
+lemma executable_to_ga_complete:
+  exists-trace
+  "Ex did ids k #i.
+     GA_Complete('GA','GB',did,ids,k) @ #i"
+
+/*
+A complete mutually confirmed session must be reachable.
+*/
+lemma executable_session:
+  exists-trace
+  "Ex did ids k #i #j.
+       GA_Complete(
+         'GA','GB',did,ids,k
+       ) @ #i
+     & GB_Complete(
+         'GA','GB',did,ids,k
+       ) @ #j
+     & #i < #j"
+
+
+/*
+The complete session -> anchor -> revoke lifecycle must also be reachable.
+*/
+lemma executable_full_lifecycle:
+  exists-trace
+  "Ex did ids k tx1 tx2 #i #j #a #r.
+       GA_Complete(
+         'GA','GB',did,ids,k
+       ) @ #i
+     & GB_Complete(
+         'GA','GB',did,ids,k
+       ) @ #j
+     & SessionAnchored(
+         'GA','GB',did,ids,tx1
+       ) @ #a
+     & SessionRevoked(
+         'GA','GB',did,ids,tx2
+       ) @ #r
+     & #i < #j
+     & #j < #a
+     & #a < #r"
+
+lemma executable_session_honest:
+  exists-trace
+  "Ex did ids k #i #j.
+       GA_Complete(
+         'GA','GB',did,ids,k
+       ) @ #i
+     & GB_Complete(
+         'GA','GB',did,ids,k
+       ) @ #j
+     & #i < #j
+
+     & not(
+         Ex g #r.
+           RevealSigLtk(g) @ #r
+       )
+
+     & not(
+         Ex g #r.
+           RevealKemLtk(g) @ #r
+       )
+
+     & not(
+         Ex #r.
+           RevealSACLtk('SAC') @ #r
+       )
+
+     & not(
+         Ex x #r.
+           RevealSACState(x) @ #r
+       )"
+/* ============================================================================
+   AUTHENTICATION
+   ============================================================================ */
+
+/*
+If GA accepts GB in an uncompromised target run,
+a matching GB response must have occurred.
+*/
+lemma ga_authentication:
+  all-traces
+  "All ga gb did ids k #i.
+       GA_Complete(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & not(
+         Ex #r.
+           RevealSigLtk(gb) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+         & #r < #i
+       )
+
+     ==>
+
+       Ex #j.
+         GB_Response(
+           ga,gb,did,ids,k
+         ) @ #j
+       & #j < #i"
+
+
+/*
+GB's completion requires GA to have returned the reciprocal confirmation tag.
+*/
+lemma gb_authentication:
+  all-traces
+  "All ga gb did ids k #i.
+
+       GB_Complete(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & not(
+         Ex #r.
+           RevealSigLtk(ga) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealSACState(ids) @ #r
+         & #r < #i
+       )
+
+     ==>
+
+       Ex #j.
+         GA_Complete(
+           ga,gb,did,ids,k
+         ) @ #j
+       & #j < #i"
+
+/*
+Injectivity is stated over accepted GA runs, rather than merely asserting
+that two equal events have equal timepoints.
+*/
+lemma ga_injective_agreement:
+  all-traces
+  "All ga gb did ids k #i.
+       GA_Complete(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & not(
+         Ex #r.
+           RevealSigLtk(gb) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+         & #r < #i
+       )
+
+     ==>
+
+       (
+         Ex #j.
+           GB_Response(
+             ga,gb,did,ids,k
+           ) @ #j
+         & #j < #i
+
+         & (
+             All #i2.
+               GA_Complete(
+                 ga,gb,did,ids,k
+               ) @ #i2
+               ==> #i2 = #i
+           )
+       )"
+
+
+/* ============================================================================
+   AUTHORIZATION DEPENDENCY
+   ============================================================================ */
+
+/*
+With the SAC signing key uncompromised, an accepted session must correspond
+to an honestly issued SAC token.
+*/
+lemma session_requires_sac_authorization:
+  all-traces
+  "All ga gb did ids k #i.
+       GA_Complete(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & not(
+         Ex #r.
+           RevealSACLtk('SAC') @ #r
+         & #r < #i
+       )
+
+     ==>
+
+       Ex #j.
+         TokenIssued(
+           ids,did,ga,gb
+         ) @ #j
+       & #j < #i"
+
+
+/* ============================================================================
+   SESSION-KEY SECRECY
+   ============================================================================ */
+
+/*
+Baseline target-session secrecy.
+
+SAC state disclosure is NOT excluded here.
+Therefore successful proof includes traces in which SAC-side session state
+is exposed.
+
+We exclude:
+  - compromise of GA's authentication key, because together with SAC-state
+    disclosure it would constitute a multi-domain attack;
+  - compromise of GB's KEM key, which directly destroys target-session
+    KEM secrecy.
+
+No forward-secrecy claim is made after KEM-key disclosure.
+*/
+lemma session_key_secrecy:
+  all-traces
+  "All ga gb did ids k #i.
+       SessionEstablished(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & not(
+         Ex #r.
+           RevealSigLtk(ga) @ #r
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+       )
+
+     ==>
+
+       not(
+         Ex #t.
+           K(k) @ #t
+       )"
+
+
+/*
+Explicit split-trust secrecy:
+even when SAC-controlled session state is exposed, Ksess remains secret
+provided the target gateway authentication/KEM secrets remain protected.
+*/
+lemma split_trust_secrecy_under_sac_state_reveal:
+  all-traces
+  "All ga gb did ids k #i.
+       SessionEstablished(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & (
+         Ex #s.
+           RevealSACState(ids) @ #s
+       )
+
+     & not(
+         Ex #r.
+           RevealSigLtk(ga) @ #r
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+       )
+
+     ==>
+
+       not(
+         Ex #t.
+           K(k) @ #t
+       )"
+
+
+/* ============================================================================
+   KEY AGREEMENT
+   ============================================================================ */
+
+/*
+lemma key_agreement:
+  all-traces
+  "All did ids k1 k2 #i #j.
+       GA_Complete('GA','GB',did,ids,k1) @ #i
+     & GB_Complete('GA','GB',did,ids,k2) @ #j
+     ==> k1 = k2"
+*/
+/* ============================================================================
+   KEY INDEPENDENCE / UKS RESISTANCE
+   ----------------------------------------------------------------------------
+   This is no longer based on a hard-coded 'GB' peer on both sides.
+   If the same accepted key appears in two completed sessions, the complete
+   session binding must be identical.
+   ============================================================================ */
+
+lemma key_binding_and_uks_resistance:
+  all-traces
+  "All ga1 gb1 did1 ids1
+       ga2 gb2 did2 ids2
+       k #i #j.
+
+       SessionEstablished(
+         ga1,gb1,did1,ids1,k
+       ) @ #i
+
+     & SessionEstablished(
+         ga2,gb2,did2,ids2,k
+       ) @ #j
+
+     ==>
+
+       ids1 = ids2
+     & ga1  = ga2
+     & gb1  = gb2
+     & did1 = did2"
+
+
+/* ============================================================================
+   SESSION IDENTIFIER UNIQUENESS
+   ============================================================================ */
+
+lemma session_id_unique:
+  all-traces
+  "All ids did1 ga1 gb1
+       did2 ga2 gb2
+       #i #j.
+
+       SessionIssued(
+         ids,did1,ga1,gb1
+       ) @ #i
+
+     & SessionIssued(
+         ids,did2,ga2,gb2
+       ) @ #j
+
+     ==>
+
+       #i = #j"
+
+
+/* ============================================================================
+   LEDGER ORDERING
+   ============================================================================ */
+
+lemma anchor_implies_completed_session:
+  all-traces
+  "All ga gb did ids tx #i.
+       SessionAnchored(
+         ga,gb,did,ids,tx
+       ) @ #i
+
+     ==>
+
+       Ex k #j.
+         SessionEstablished(
+           ga,gb,did,ids,k
+         ) @ #j
+       & #j < #i"
+
+
+lemma revoke_requires_anchor:
+  all-traces
+  "All ga gb did ids txRev #i.
+       SessionRevoked(
+         ga,gb,did,ids,txRev
+       ) @ #i
+
+     ==>
+
+       Ex txSess #j.
+         SessionAnchored(
+           ga,gb,did,ids,txSess
+         ) @ #j
+       & #j < #i"
+
+
+/* ============================================================================
+   KCI
+   ----------------------------------------------------------------------------
+   Standard KCI direction used here:
+
+   GA's own long-term authentication/signing key is compromised.
+   The adversary then attempts to impersonate GB to GA.
+
+   The property requires a genuine prior GB response as long as GB's
+   signing/KEM material and SAC state remain uncompromised.
+   ============================================================================ */
+
+lemma kci_resilience_ga_key_reveal:
+  all-traces
+  "All ga gb did ids k #i.
+       GA_Complete(
+         ga,gb,did,ids,k
+       ) @ #i
+
+     & (
+         Ex #r.
+           RevealSigLtk(ga) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealSigLtk(gb) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealKemLtk(gb) @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealSACLtk('SAC') @ #r
+         & #r < #i
+       )
+
+     & not(
+         Ex #r.
+           RevealSACState(ids) @ #r
+         & #r < #i
+       )
+
+     ==>
+
+       Ex #j.
+         GB_Response(
+           ga,gb,did,ids,k
+         ) @ #j
+       & #j < #i"
+
+
+end
