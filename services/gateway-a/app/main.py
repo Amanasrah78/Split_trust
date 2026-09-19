@@ -1,6 +1,7 @@
 import asyncio
 import hmac as stdlib_hmac
 import os
+from dataclasses import dataclass
 from contextlib import asynccontextmanager
 
 import httpx
@@ -15,6 +16,7 @@ from shared.splittrust.crypto import (
     derive_ledger_freshness,
     derive_salt_commitment,
     derive_session_commitment,
+    derive_revocation_commitment,
     derive_session_key,
     kem_encapsulate,
     random_bytes,
@@ -36,6 +38,8 @@ from shared.splittrust.models import (
     HandshakeResponse,
     LedgerCommitAccepted,
     LedgerCommitRequest,
+    LedgerRevocationAccepted,
+    LedgerRevocationRequest,
     SessionMetrics,
     SessionRequest,
 )
@@ -128,6 +132,7 @@ async def lifespan(app: FastAPI):
     app.state.ledger_epoch = ledger_epoch
     app.state.ledger_mode = ledger_data["ledger_mode"]
     app.state.gateway_b_public_key = gateway_b_public_key
+    app.state.established_sessions = {}
 
     log_event(
         SERVICE,
@@ -140,6 +145,14 @@ async def lifespan(app: FastAPI):
     yield
     await client.aclose()
 
+@dataclass
+class EstablishedSessionRecord:
+    trace_id: str
+    session_id: str
+    session_commitment: bytes
+    established_wall_clock_ns: int
+    revocation_job_id: str | None = None
+    revocation_requested_wall_clock_ns: int | None = None
 
 app = FastAPI(
     title="Split-Trust Gateway A",
@@ -158,7 +171,93 @@ async def health() -> dict[str, object]:
         "ledger_epoch_cached": True,
     }
 
+@app.post("/sessions/{session_id}/revoke")
+async def revoke_session(
+    session_id: str,
+    reason: str = "manual",
+) -> dict[str, object]:
+    session: EstablishedSessionRecord | None = (
+        app.state.established_sessions.get(session_id)
+    )
 
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown or non-established session",
+        )
+
+    if session.revocation_job_id is not None:
+        return {
+            "session_id": session.session_id,
+            "job_id": session.revocation_job_id,
+            "requested_wall_clock_ns": (
+                session.revocation_requested_wall_clock_ns
+            ),
+            "already_requested": True,
+        }
+
+    requested_at = wall_clock_ns()
+
+    revocation_commitment = derive_revocation_commitment(
+        session_id=session.session_id,
+        session_commitment=session.session_commitment,
+        revocation_context=reason,
+        revoked_at_ns=requested_at,
+    )
+
+    try:
+        response = await app.state.client.post(
+            f"{LEDGER_URL}/revocations",
+            json=LedgerRevocationRequest(
+                trace_id=session.trace_id,
+                session_id=session.session_id,
+                revocation_commitment_b64=b64encode(
+                    revocation_commitment
+                ),
+                requested_wall_clock_ns=requested_at,
+            ).model_dump(mode="json"),
+        )
+
+        response.raise_for_status()
+
+        result = LedgerRevocationAccepted.model_validate(
+            response.json()
+        )
+
+    except Exception as exc:
+        log_event(
+            SERVICE,
+            "revocation_enqueue_failed",
+            session.trace_id,
+            session_id=session.session_id,
+            error=str(exc),
+        )
+
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to submit revocation to ledger",
+        ) from exc
+
+    session.revocation_job_id = result.job_id
+    session.revocation_requested_wall_clock_ns = requested_at
+
+    log_event(
+        SERVICE,
+        "revocation_requested",
+        session.trace_id,
+        session_id=session.session_id,
+        revocation_job_id=result.job_id,
+        requested_wall_clock_ns=requested_at,
+        reason=reason,
+    )
+
+    return {
+        "session_id": session.session_id,
+        "job_id": result.job_id,
+        "status": result.status,
+        "requested_wall_clock_ns": requested_at,
+        "already_requested": False,
+    }
 @app.post(
     "/sessions",
     response_model=SessionMetrics,
@@ -496,6 +595,16 @@ async def establish_session(
         context.device_pseudonym,
         session_key,
     )
+
+    app.state.established_sessions[context.session_id] = (
+        EstablishedSessionRecord(
+            trace_id=trace_id,
+            session_id=context.session_id,
+            session_commitment=commitment,
+            established_wall_clock_ns=session_usable_wall_clock_ns,
+        )
+    )
+
 
     # This starts only after t5 and cannot affect e2e_ns.
     ledger_enqueue_started = monotonic_ns()

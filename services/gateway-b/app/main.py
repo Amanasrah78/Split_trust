@@ -1,7 +1,7 @@
 import asyncio
 import hmac as stdlib_hmac
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 
 import httpx
@@ -51,6 +51,9 @@ GATEWAY_A_DID = os.getenv("GATEWAY_A_DID", "did:iota:gateway-a")
 GATEWAY_B_DID = os.getenv("GATEWAY_B_DID", "did:iota:gateway-b")
 SAC_URL = os.getenv("SAC_URL", "http://sac:8000")
 LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger-adapter:8000")
+REVOCATION_POLL_INTERVAL_MS = int(
+    os.getenv("REVOCATION_POLL_INTERVAL_MS", "100")
+)
 CHANNEL_KEY = b64decode(os.environ["SAC_CHANNEL_KEY_B_B64"])
 GATEWAY_B_SIGNING_SEED = b64decode(
     os.environ["GATEWAY_B_SIGNING_SEED_B64"]
@@ -92,6 +95,18 @@ class PendingHandshake:
     ciphertext: bytes
     s_auth: bytes
 
+@dataclass
+class EstablishedSession:
+    trace_id: str
+    session_id: str
+    action: str
+    expires_at_ns: int
+    established_wall_clock_ns: int
+    revoked: bool = False
+    revoked_wall_clock_ns: int | None = None
+    revocation_confirmed_wall_clock_ns: int | None = None
+    revocation_job_id: str | None = None
+
 async def fetch_startup_value(
     client: httpx.AsyncClient,
     url: str,
@@ -113,6 +128,65 @@ async def fetch_startup_value(
 
     raise RuntimeError(f"Unable to load {field}: {last_error}")
 
+async def revocation_monitor(app: FastAPI) -> None:
+    while True:
+        sessions = list(app.state.established_sessions.values())
+
+        for session in sessions:
+            if session.revoked:
+                continue
+
+            if session.expires_at_ns <= wall_clock_ns():
+                continue
+
+            try:
+                response = await app.state.client.get(
+                    f"{LEDGER_URL}/session-revocations/"
+                    f"{session.session_id}"
+                )
+
+                if response.status_code == 404:
+                    continue
+
+                response.raise_for_status()
+                revocation = response.json()
+
+                if revocation.get("status") != "confirmed":
+                    continue
+
+                detected_at = wall_clock_ns()
+                confirmed_at = revocation.get(
+                    "confirmed_wall_clock_ns"
+                )
+
+                session.revoked = True
+                session.revoked_wall_clock_ns = detected_at
+                session.revocation_confirmed_wall_clock_ns = (
+                    confirmed_at
+                )
+                session.revocation_job_id = revocation.get("job_id")
+
+                detection_latency_ns = None
+                if isinstance(confirmed_at, int):
+                    detection_latency_ns = detected_at - confirmed_at
+
+                log_event(
+                    SERVICE,
+                    "ledger_revocation_enforced",
+                    session.trace_id,
+                    session_id=session.session_id,
+                    revocation_job_id=session.revocation_job_id,
+                    confirmed_wall_clock_ns=confirmed_at,
+                    enforced_wall_clock_ns=detected_at,
+                    detection_latency_ns=detection_latency_ns,
+                )
+
+            except httpx.HTTPError:
+                continue
+
+        await asyncio.sleep(
+            REVOCATION_POLL_INTERVAL_MS / 1000
+        )
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -147,6 +221,10 @@ async def lifespan(app: FastAPI):
     app.state.kem_secret_key = kem_secret_key
     app.state.authorizations = {}
     app.state.pending_handshakes = {}
+    app.state.established_sessions = {}
+    revocation_monitor_task = asyncio.create_task(
+        revocation_monitor(app)
+    )
 
     log_event(
         SERVICE,
@@ -157,6 +235,11 @@ async def lifespan(app: FastAPI):
     )
 
     yield
+
+    revocation_monitor_task.cancel()
+    with suppress(asyncio.CancelledError):
+        await revocation_monitor_task
+
     await client.aclose()
 
 
@@ -176,6 +259,88 @@ async def health() -> dict[str, object]:
         "pending_authorizations": len(app.state.authorizations),
     }
 
+
+@app.post("/sessions/{session_id}/validate-action")
+async def validate_session_action(
+    session_id: str,
+    action: str,
+) -> dict[str, object]:
+    session: EstablishedSession | None = (
+        app.state.established_sessions.get(session_id)
+    )
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown or non-established session",
+        )
+
+    if session.revoked:
+        raise HTTPException(
+            status_code=403,
+            detail="Session has been revoked",
+        )
+
+    if session.expires_at_ns <= wall_clock_ns():
+        raise HTTPException(
+            status_code=403,
+            detail="Session has expired",
+        )
+
+    if not stdlib_hmac.compare_digest(action, session.action):
+        raise HTTPException(
+            status_code=403,
+            detail="Action is not authorized for this session",
+        )
+
+    return {
+        "session_id": session.session_id,
+        "action": action,
+        "authorized": True,
+        "revoked": False,
+    }
+
+@app.post("/sessions/{session_id}/revoke")
+async def revoke_session(
+    session_id: str,
+) -> dict[str, object]:
+    session: EstablishedSession | None = (
+        app.state.established_sessions.get(session_id)
+    )
+
+    if session is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Unknown or non-established session",
+        )
+
+    if session.revoked:
+        return {
+            "session_id": session.session_id,
+            "revoked": True,
+            "revoked_wall_clock_ns": session.revoked_wall_clock_ns,
+            "already_revoked": True,
+        }
+
+    revoked_at = wall_clock_ns()
+
+    session.revoked = True
+    session.revoked_wall_clock_ns = revoked_at
+
+    log_event(
+        SERVICE,
+        "session_revoked",
+        session.trace_id,
+        session_id=session.session_id,
+        revoked_wall_clock_ns=revoked_at,
+    )
+
+    return {
+        "session_id": session.session_id,
+        "revoked": True,
+        "revoked_wall_clock_ns": revoked_at,
+        "already_revoked": False,
+    }
 
 @app.get(
     "/kem-public-key",
@@ -495,15 +660,33 @@ async def confirm_handshake(
 
     verification_ns = monotonic_ns() - verification_started
 
+    stored: StoredAuthorization | None = (
+        app.state.authorizations.get(request.session_id)
+    )
+
+    if stored is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Authorization state is unavailable for this session",
+        )
+
+    app.state.established_sessions[request.session_id] = EstablishedSession(
+        trace_id=request.trace_id,
+        session_id=request.session_id,
+        action=stored.package.capability.action,
+        expires_at_ns=stored.package.context.expires_at_ns,
+        established_wall_clock_ns=wall_clock_ns(),
+    )
+
     del app.state.pending_handshakes[request.session_id]
 
     log_event(
-        SERVICE,
-        "session_established",
-        request.trace_id,
-        session_id=request.session_id,
-        confirmation_verification_ns=verification_ns,
-    )
+            SERVICE,
+            "session_established",
+            request.trace_id,
+            session_id=request.session_id,
+            confirmation_verification_ns=verification_ns,
+        )
 
     return HandshakeConfirmationResponse(
         session_id=request.session_id,

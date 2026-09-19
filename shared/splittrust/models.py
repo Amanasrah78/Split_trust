@@ -133,6 +133,38 @@ class LedgerCommitStatus(BaseModel):
     failure_kind: str | None = None
     error: str | None = None
 
+class LedgerRevocationRequest(BaseModel):
+    trace_id: str
+    session_id: str
+    revocation_commitment_b64: str
+    requested_wall_clock_ns: int
+
+
+class LedgerRevocationAccepted(BaseModel):
+    job_id: str
+    session_id: str
+    status: Literal["queued"]
+
+
+class LedgerRevocationStatus(BaseModel):
+    job_id: str
+    session_id: str
+    status: Literal[
+        "queued",
+        "submitting",
+        "confirming",
+        "confirmed",
+        "failed",
+    ]
+    queued_wall_clock_ns: int
+    confirmed_wall_clock_ns: int | None = None
+    ledger_final_ns: int | None = None
+    submit_latency_ns: int | None = None
+    confirmation_latency_ns: int | None = None
+    ledger_identifier: str | None = None
+    lookup_status: str | None = None
+    failure_kind: str | None = None
+    error: str | None = None
 
 class SessionRequest(BaseModel):
     device_handle: str = "actuator-r"

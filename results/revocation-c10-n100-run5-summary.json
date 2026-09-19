@@ -1,0 +1,57 @@
+{
+  "all_checks_passed": true,
+  "concurrency": 10,
+  "controls_preserved": 100,
+  "correctly_enforced": 100,
+  "failures": 0,
+  "ledger_finality": {
+    "max_ms": 12004.442339,
+    "mean_ms": 12000.35628555,
+    "median_ms": 12000.2494435,
+    "min_ms": 11998.672172,
+    "p95_ms": 12001.678960149999,
+    "p99_ms": 12002.382149
+  },
+  "ledger_latency": {
+    "max_ms": 12021.412908,
+    "mean_ms": 12003.22913136,
+    "median_ms": 12001.4939225,
+    "min_ms": 11999.152506,
+    "p95_ms": 12015.75063715,
+    "p99_ms": 12017.6867955
+  },
+  "mode": "revocation",
+  "observed_detection_latency": {
+    "max_ms": 147.340042,
+    "mean_ms": 81.14182945,
+    "median_ms": 84.6050415,
+    "min_ms": 6.307375,
+    "p95_ms": 130.1888563,
+    "p99_ms": 142.99274509000003
+  },
+  "post_enforcement_reuse_accepts": 0,
+  "primary_latency": {
+    "max_ms": 12147.468214,
+    "mean_ms": 12084.37096081,
+    "median_ms": 12086.118415,
+    "min_ms": 12005.895589,
+    "p95_ms": 12130.6016331,
+    "p99_ms": 12143.45495992
+  },
+  "primary_metric": "total_revocation_latency_ns",
+  "requests": 100,
+  "reuse_rejected": 100,
+  "successes": 100,
+  "test_elapsed_seconds": 121.596939764,
+  "throughput_cases_per_second": 0.8223891176380247,
+  "total_revocation_latency": {
+    "max_ms": 12147.468214,
+    "mean_ms": 12084.37096081,
+    "median_ms": 12086.118415,
+    "min_ms": 12005.895589,
+    "p95_ms": 12130.6016331,
+    "p99_ms": 12143.45495992
+  },
+  "unaffected_session_failures": 0,
+  "warmup": 0
+}

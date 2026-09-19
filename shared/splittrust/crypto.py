@@ -356,3 +356,22 @@ def derive_session_commitment(
             sha256(session_key),
         )
     )
+
+def derive_revocation_commitment(
+    session_id: str,
+    session_commitment: bytes,
+    revocation_context: str,
+    revoked_at_ns: int,
+) -> bytes:
+    if len(session_commitment) != 32:
+        raise ValueError("Session commitment must contain 32 bytes")
+
+    return sha256(
+        frame(
+            b"splittrust-revocation-v1",
+            session_id.encode(),
+            session_commitment,
+            revocation_context.encode(),
+            str(revoked_at_ns).encode(),
+        )
+    )
