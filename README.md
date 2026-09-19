@@ -21,35 +21,40 @@ This testbed implements SAC-inclusive cross-domain authorization and post-quantu
 
 ## Protocol flow
 
-1. Gateway A generates a nonce.
-2. The E2E timer starts immediately before Gateway A sends the SAC request.
-3. The SAC evaluates policy and constructs the session context and capability.
-4. The SAC generates `S_SAC` and `S_auth`.
-5. The SAC signs and encrypts authorization material for both gateways.
-6. Both gateways verify the authorization package and cached ledger epoch.
-7. Gateway A performs ML-KEM-768 encapsulation.
-8. Gateway B performs ML-KEM-768 decapsulation.
-9. Both gateways derive the session key with HKDF-SHA-256.
-10. Gateway B generates an HMAC-SHA-256 confirmation.
-11. Gateway A verifies the confirmation and stops the E2E timer.
-12. The session becomes usable.
-13. Gateway A submits the session commitment asynchronously.
+1. Gateway A generates a fresh nonce and requests authorization from the SAC.
+2. The SAC evaluates policy, constructs the signed session context and capability, generates `S_SAC` and `S_auth`, and provisions the authorization material to both gateways.
+3. Both gateways verify the SAC authorization package and cached ledger epoch.
+4. Gateway A performs ML-KEM-768 encapsulation and derives the candidate session key.
+5. Gateway A signs the handshake initiation (`SigA`), binding the session identifier, gateway identities, device pseudonym, ML-KEM ciphertext, nonce, SAC capability signature, and expiry.
+6. Gateway B verifies `SigA`, performs ML-KEM-768 decapsulation, and derives the same candidate session key.
+7. Gateway B generates direction-bound `TagB`, signs the response as `SigB`, and returns both to Gateway A.
+8. Gateway A verifies `SigB` and then verifies `TagB`.
+9. Gateway A generates direction-bound `TagA` and sends it to Gateway B.
+10. Gateway B verifies `TagA`.
+11. The session becomes usable only after Gateway B accepts `TagA` and Gateway A receives the successful confirmation response.
+12. Gateway A submits the session commitment asynchronously after session establishment.
 
 ## Timing definitions
 
 ### SAC-inclusive E2E latency
 
-`e2e_ns` starts immediately before Gateway A sends the SAC request and ends after successful key-confirmation verification.
+`e2e_ns` starts immediately before Gateway A sends the SAC authorization request and ends only after Gateway B has verified `TagA` and Gateway A has received the successful reciprocal-confirmation response.
 
-It includes SAC interaction, Docker-network transport, authorization verification, ML-KEM, HKDF, MAC confirmation, serialization, scheduling, and gateway processing.
+It includes SAC interaction, Docker-network transport, authorization verification, ML-KEM-768 operations, HKDF-SHA-256 key derivation, Ed25519 gateway signature generation and verification, direction-bound HMAC-SHA-256 key confirmation, serialization, scheduling, and gateway processing.
 
 It excludes ledger enqueue, ledger finality, periodic revocation lookup, and later data-plane traffic.
 
+
+
 ### Gateway cryptographic processing
 
-`gateway_crypto_full_ns` is cumulative processing across both gateways. It includes authorization verification, ML-KEM, HKDF, and MAC operations.
+Gateway cryptographic processing includes authorization verification where applicable, ML-KEM operations, HKDF-SHA-256, Ed25519 handshake signing and verification, and direction-bound HMAC-SHA-256 confirmation operations.
 
-It is not an E2E wall-clock interval.
+`gateway_a_total_crypto_ns` includes Gateway A authorization verification, ML-KEM encapsulation, KDF, `SigA` generation, `SigB` verification, `TagB` verification, and `TagA` generation.
+
+`gateway_b_total_crypto_ns` includes `SigA` verification, ML-KEM decapsulation, KDF, `TagB` generation, `SigB` generation, and final `TagA` verification.
+
+These values are cumulative cryptographic-processing measurements and are not wall-clock E2E intervals.
 
 ### Ledger latency
 
@@ -71,16 +76,7 @@ baseline compose file unchanged.
 
 ## Repeated concurrency-1 results
 
-Five trials were run. Each contained 1,000 measured sessions after 100 warm-ups.
-
-| Metric | Mean and 95% CI | p95 and 95% CI |
-|---|---:|---:|
-| SAC-inclusive E2E | 2.1684 ± 0.0939 ms | 2.8499 ± 0.3801 ms |
-| Authorization path | 1.3773 ± 0.0636 ms | 1.8394 ± 0.2661 ms |
-| SAC processing | 0.8019 ± 0.0392 ms | 1.0846 ± 0.1570 ms |
-| Gateway cryptographic processing | 0.3223 ± 0.0137 ms | 0.4163 ± 0.0452 ms |
-| Gateway handshake round trip | 0.6074 ± 0.0211 ms | 0.7889 ± 0.0732 ms |
-| Post-usability ledger enqueue | 0.5629 ± 0.0238 ms | 0.7265 ± 0.0961 ms |
+The performance measurements reported by the previous implementation are being regenerated after alignment of the executable protocol with the formal model. The revised protocol adds reciprocal key confirmation (`TagA`/`TagB`) and authenticated gateway handshake messages (`SigA`/`SigB`), so earlier latency measurements are not directly comparable to the current implementation.
 
 ## SAC scalability
 
