@@ -6,6 +6,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 from shared.splittrust.crypto import (
+    CONFIRMATION_DIR_A,
+    CONFIRMATION_DIR_B,
     confirmation_tag,
     decrypt_authorization,
     derive_ledger_freshness,
@@ -21,6 +23,9 @@ from shared.splittrust.crypto import (
     sign_object,
     verify_confirmation_tag,
     verify_signed_package,
+    gateway_a_handshake_signature_payload,
+    gateway_b_handshake_signature_payload,
+    verify_object,
 )
 from shared.splittrust.encoding import b64encode
 from shared.splittrust.models import (
@@ -177,13 +182,16 @@ def test_session_derivation_and_confirmation():
 
     nonce_a = os.urandom(32)
     nonce_b = os.urandom(32)
-    tag = confirmation_tag(
+
+
+    tag_b = confirmation_tag(
         receiver_key,
         context.session_id,
         nonce_a,
         nonce_b,
         ciphertext,
         s_auth,
+        CONFIRMATION_DIR_B,
     )
 
     verify_confirmation_tag(
@@ -193,7 +201,29 @@ def test_session_derivation_and_confirmation():
         nonce_b,
         ciphertext,
         s_auth,
-        tag,
+        CONFIRMATION_DIR_B,
+        tag_b,
+    )
+
+    tag_a = confirmation_tag(
+        sender_key,
+        context.session_id,
+        nonce_a,
+        nonce_b,
+        ciphertext,
+        s_auth,
+        CONFIRMATION_DIR_A,
+    )
+
+    verify_confirmation_tag(
+        receiver_key,
+        context.session_id,
+        nonce_a,
+        nonce_b,
+        ciphertext,
+        s_auth,
+        CONFIRMATION_DIR_A,
+        tag_a,
     )
 
     assert sender_key == receiver_key
@@ -206,3 +236,111 @@ def test_session_derivation_and_confirmation():
             sender_key,
         )
     ) == 32
+
+def test_confirmation_direction_separation():
+    session_key = os.urandom(32)
+    session_id = "session-test"
+    nonce_a = os.urandom(32)
+    nonce_b = os.urandom(32)
+    ciphertext = os.urandom(64)
+    s_auth = os.urandom(32)
+
+    tag_b = confirmation_tag(
+        session_key,
+        session_id,
+        nonce_a,
+        nonce_b,
+        ciphertext,
+        s_auth,
+        CONFIRMATION_DIR_B,
+    )
+
+    with pytest.raises(Exception):
+        verify_confirmation_tag(
+            session_key,
+            session_id,
+            nonce_a,
+            nonce_b,
+            ciphertext,
+            s_auth,
+            CONFIRMATION_DIR_A,
+            tag_b,
+        )
+
+
+def test_gateway_a_signature_rejects_tampered_handshake():
+    private_key = ed25519_private_key_from_seed(os.urandom(32))
+    public_key = ed25519_public_key_bytes(private_key)
+
+    payload = gateway_a_handshake_signature_payload(
+        session_id="session-1",
+        device_pseudonym="device-pseudonym",
+        gateway_a_did="did:iota:gateway-a",
+        gateway_b_did="did:iota:gateway-b",
+        kem_ciphertext_b64="ciphertext",
+        nonce_a_b64="nonce-a",
+        capability_signature_b64="capability-signature",
+        expires_at_ns=123456789,
+    )
+
+    signature = sign_object(
+        private_key,
+        payload,
+    )
+
+    tampered_payload = gateway_a_handshake_signature_payload(
+        session_id="session-1",
+        device_pseudonym="device-pseudonym",
+        gateway_a_did="did:iota:gateway-a",
+        gateway_b_did="did:iota:gateway-b",
+        kem_ciphertext_b64="TAMPERED-ciphertext",
+        nonce_a_b64="nonce-a",
+        capability_signature_b64="capability-signature",
+        expires_at_ns=123456789,
+    )
+
+    with pytest.raises(Exception):
+        verify_object(
+            public_key,
+            tampered_payload,
+            signature,
+        )
+def test_gateway_b_signature_rejects_tampered_confirmation():
+    private_key = ed25519_private_key_from_seed(os.urandom(32))
+    public_key = ed25519_public_key_bytes(private_key)
+
+    payload = gateway_b_handshake_signature_payload(
+        session_id="session-1",
+        device_pseudonym="device-pseudonym",
+        gateway_a_did="did:iota:gateway-a",
+        gateway_b_did="did:iota:gateway-b",
+        nonce_b_b64="nonce-b",
+        kem_ciphertext_b64="ciphertext",
+        capability_signature_b64="capability-signature",
+        expires_at_ns=123456789,
+        confirmation_tag_b64="tag-b",
+    )
+
+    signature = sign_object(
+        private_key,
+        payload,
+    )
+
+    tampered_payload = gateway_b_handshake_signature_payload(
+        session_id="session-1",
+        device_pseudonym="device-pseudonym",
+        gateway_a_did="did:iota:gateway-a",
+        gateway_b_did="did:iota:gateway-b",
+        nonce_b_b64="nonce-b",
+        kem_ciphertext_b64="ciphertext",
+        capability_signature_b64="capability-signature",
+        expires_at_ns=123456789,
+        confirmation_tag_b64="TAMPERED-tag-b",
+    )
+
+    with pytest.raises(Exception):
+        verify_object(
+            public_key,
+            tampered_payload,
+            signature,
+        )

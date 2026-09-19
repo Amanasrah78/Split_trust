@@ -25,7 +25,8 @@ KEM_ALGORITHM = "ML-KEM-768"
 DOMAIN_ROOT = b"SAC-SPLIT-TRUST/v1"
 SESSION_KEY_INFO = b"session-key/v1"
 CONFIRMATION_INFO = b"key-confirmation/v1"
-
+CONFIRMATION_DIR_A = b"dirA"
+CONFIRMATION_DIR_B = b"dirB"
 
 def random_bytes(length: int = 32) -> bytes:
     return os.urandom(length)
@@ -92,7 +93,52 @@ def verify_object(
         canonical_json(value),
     )
 
+def gateway_a_handshake_signature_payload(
+    session_id: str,
+    device_pseudonym: str,
+    gateway_a_did: str,
+    gateway_b_did: str,
+    kem_ciphertext_b64: str,
+    nonce_a_b64: str,
+    capability_signature_b64: str,
+    expires_at_ns: int,
+) -> dict[str, object]:
+    return {
+        "message_type": "ga_kem",
+        "session_id": session_id,
+        "device_pseudonym": device_pseudonym,
+        "gateway_a_did": gateway_a_did,
+        "gateway_b_did": gateway_b_did,
+        "kem_ciphertext_b64": kem_ciphertext_b64,
+        "nonce_a_b64": nonce_a_b64,
+        "capability_signature_b64": capability_signature_b64,
+        "expires_at_ns": expires_at_ns,
+    }
 
+
+def gateway_b_handshake_signature_payload(
+    session_id: str,
+    device_pseudonym: str,
+    gateway_a_did: str,
+    gateway_b_did: str,
+    nonce_b_b64: str,
+    kem_ciphertext_b64: str,
+    capability_signature_b64: str,
+    expires_at_ns: int,
+    confirmation_tag_b64: str,
+) -> dict[str, object]:
+    return {
+        "message_type": "gb_resp",
+        "session_id": session_id,
+        "device_pseudonym": device_pseudonym,
+        "gateway_a_did": gateway_a_did,
+        "gateway_b_did": gateway_b_did,
+        "nonce_b_b64": nonce_b_b64,
+        "kem_ciphertext_b64": kem_ciphertext_b64,
+        "capability_signature_b64": capability_signature_b64,
+        "expires_at_ns": expires_at_ns,
+        "confirmation_tag_b64": confirmation_tag_b64,
+    }
 def verify_signed_package(
     public_key_bytes: bytes,
     package: SignedSessionPackage,
@@ -241,7 +287,14 @@ def confirmation_tag(
     nonce_b: bytes,
     kem_ciphertext: bytes,
     s_auth: bytes,
+    direction: bytes,
 ) -> bytes:
+    if direction not in {
+        CONFIRMATION_DIR_A,
+        CONFIRMATION_DIR_B,
+    }:
+        raise ValueError("Invalid confirmation direction")
+
     mac = hmac.HMAC(session_key, hashes.SHA256())
     mac.update(
         frame(
@@ -251,6 +304,7 @@ def confirmation_tag(
             nonce_b,
             kem_ciphertext,
             s_auth,
+            direction,
         )
     )
     return mac.finalize()
@@ -263,8 +317,15 @@ def verify_confirmation_tag(
     nonce_b: bytes,
     kem_ciphertext: bytes,
     s_auth: bytes,
+    direction: bytes,
     received_tag: bytes,
 ) -> None:
+    if direction not in {
+        CONFIRMATION_DIR_A,
+        CONFIRMATION_DIR_B,
+    }:
+        raise ValueError("Invalid confirmation direction")
+
     mac = hmac.HMAC(session_key, hashes.SHA256())
     mac.update(
         frame(
@@ -274,10 +335,10 @@ def verify_confirmation_tag(
             nonce_b,
             kem_ciphertext,
             s_auth,
+            direction,
         )
     )
     mac.verify(received_tag)
-
 
 def derive_session_commitment(
     session_id: str,

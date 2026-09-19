@@ -7,7 +7,10 @@ import httpx
 from fastapi import FastAPI, HTTPException
 
 from shared.splittrust.crypto import (
+    CONFIRMATION_DIR_A,
+    CONFIRMATION_DIR_B,
     KEM_ALGORITHM,
+    confirmation_tag,
     decrypt_authorization,
     derive_ledger_freshness,
     derive_salt_commitment,
@@ -17,11 +20,18 @@ from shared.splittrust.crypto import (
     random_bytes,
     verify_confirmation_tag,
     verify_signed_package,
+    ed25519_private_key_from_seed,
+    gateway_a_handshake_signature_payload,
+    gateway_b_handshake_signature_payload,
+    sign_object,
+    verify_object,
 )
 from shared.splittrust.encoding import b64decode, b64encode
 from shared.splittrust.models import (
     AuthorizationRequest,
     AuthorizationResponse,
+    HandshakeConfirmationRequest,
+    HandshakeConfirmationResponse,
     HandshakeRequest,
     HandshakeResponse,
     LedgerCommitAccepted,
@@ -43,6 +53,23 @@ SAC_URL = os.getenv("SAC_URL", "http://sac:8000")
 GATEWAY_B_URL = os.getenv("GATEWAY_B_URL", "http://gateway-b:8000")
 LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger-adapter:8000")
 CHANNEL_KEY = b64decode(os.environ["SAC_CHANNEL_KEY_A_B64"])
+GATEWAY_A_SIGNING_SEED = b64decode(
+    os.environ["GATEWAY_A_SIGNING_SEED_B64"]
+)
+
+GATEWAY_B_SIGNING_PUBLIC_KEY = b64decode(
+    os.environ["GATEWAY_B_SIGNING_PUBLIC_KEY_B64"]
+)
+
+if len(GATEWAY_A_SIGNING_SEED) != 32:
+    raise RuntimeError(
+        "Gateway A signing seed must decode to 32 bytes"
+    )
+
+if len(GATEWAY_B_SIGNING_PUBLIC_KEY) != 32:
+    raise RuntimeError(
+        "Gateway B signing public key must decode to 32 bytes"
+    )
 
 if len(CHANNEL_KEY) != 32:
     raise RuntimeError("Gateway A channel key must decode to 32 bytes")
@@ -82,6 +109,13 @@ async def lifespan(app: FastAPI):
         gateway_b_data["public_key_b64"]
     )
 
+    gateway_a_signing_key = ed25519_private_key_from_seed(
+        GATEWAY_A_SIGNING_SEED
+    )
+    app.state.gateway_a_signing_key = gateway_a_signing_key
+    app.state.gateway_b_signing_public_key = (
+        GATEWAY_B_SIGNING_PUBLIC_KEY
+    )
     if len(sac_public_key) != 32:
         raise RuntimeError("Invalid SAC public key length")
     if len(ledger_epoch) != 32:
@@ -247,13 +281,43 @@ async def establish_session(
         context.device_pseudonym,
     )
     kdf_ns = monotonic_ns() - kdf_started
+    kem_ciphertext_b64 = b64encode(kem_ciphertext)
+    nonce_a_b64 = b64encode(nonce_a)
+
+    gateway_a_signature_payload = (
+        gateway_a_handshake_signature_payload(
+            session_id=context.session_id,
+            device_pseudonym=context.device_pseudonym,
+            gateway_a_did=context.gateway_a_did,
+            gateway_b_did=context.gateway_b_did,
+            kem_ciphertext_b64=kem_ciphertext_b64,
+            nonce_a_b64=nonce_a_b64,
+            capability_signature_b64=(
+                package.capability_signature_b64
+            ),
+            expires_at_ns=context.expires_at_ns,
+        )
+    )
+
+    gateway_a_signature_generation_started = monotonic_ns()
+
+    gateway_a_signature_b64 = sign_object(
+        app.state.gateway_a_signing_key,
+        gateway_a_signature_payload,
+    )
+
+    gateway_a_signature_generation_ns = (
+        monotonic_ns() - gateway_a_signature_generation_started
+    )
 
     handshake_request = HandshakeRequest(
         trace_id=trace_id,
         session_id=context.session_id,
-        kem_ciphertext_b64=b64encode(kem_ciphertext),
-        nonce_a_b64=b64encode(nonce_a),
+        kem_ciphertext_b64=kem_ciphertext_b64,
+        nonce_a_b64=nonce_a_b64,
+        gateway_a_signature_b64=gateway_a_signature_b64,
     )
+
 
     handshake_started = monotonic_ns()
 
@@ -266,6 +330,8 @@ async def establish_session(
         handshake_result = HandshakeResponse.model_validate(
             handshake_response.json()
         )
+
+
     except httpx.HTTPError as exc:
         raise HTTPException(
             status_code=502,
@@ -280,7 +346,54 @@ async def establish_session(
             detail="Gateway B returned the wrong session identifier",
         )
 
+
+
+    gateway_b_signature_payload = (
+        gateway_b_handshake_signature_payload(
+            session_id=context.session_id,
+            device_pseudonym=context.device_pseudonym,
+            gateway_a_did=context.gateway_a_did,
+            gateway_b_did=context.gateway_b_did,
+            nonce_b_b64=handshake_result.nonce_b_b64,
+            kem_ciphertext_b64=kem_ciphertext_b64,
+            capability_signature_b64=(
+                package.capability_signature_b64
+            ),
+            expires_at_ns=context.expires_at_ns,
+            confirmation_tag_b64=(
+                handshake_result.confirmation_tag_b64
+            ),
+        )
+    )
+       # Verify Gateway B signature before accepting its key confirmation.
+    gateway_b_signature_verification_started = monotonic_ns()
+
+    try:
+        verify_object(
+            app.state.gateway_b_signing_public_key,
+            gateway_b_signature_payload,
+            handshake_result.gateway_b_signature_b64,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail="Gateway B handshake signature verification failed",
+        ) from exc
+
+    gateway_b_signature_verification_ns = (
+        monotonic_ns() - gateway_b_signature_verification_started
+    )
+
+    # Decode Gateway B's nonce only after its signed response is verified.
     nonce_b = b64decode(handshake_result.nonce_b_b64)
+
+    if len(nonce_b) != 32:
+        raise HTTPException(
+            status_code=400,
+            detail="Gateway B nonce must contain 32 bytes",
+        )
+
+    # Verify TagB from Gateway B.
     confirmation_verification_started = monotonic_ns()
 
     try:
@@ -291,6 +404,7 @@ async def establish_session(
             nonce_b,
             kem_ciphertext,
             s_auth,
+            CONFIRMATION_DIR_B,
             b64decode(handshake_result.confirmation_tag_b64),
         )
     except Exception as exc:
@@ -302,8 +416,65 @@ async def establish_session(
     confirmation_verification_ns = (
         monotonic_ns() - confirmation_verification_started
     )
+    # 2. Create TagA
+    confirmation_tag_a_started = monotonic_ns()
 
-    # t5: Key confirmation succeeded. The session is now usable.
+    tag_a = confirmation_tag(
+        session_key,
+        context.session_id,
+        nonce_a,
+        nonce_b,
+        kem_ciphertext,
+        s_auth,
+        CONFIRMATION_DIR_A,
+    )
+
+    confirmation_tag_a_ns = (
+        monotonic_ns() - confirmation_tag_a_started
+    )
+
+    # 3. Send TagA back to GB
+    confirmation_started = monotonic_ns()
+
+    try:
+        confirmation_response = await app.state.client.post(
+            f"{GATEWAY_B_URL}/handshake-confirm",
+            json=HandshakeConfirmationRequest(
+                trace_id=trace_id,
+                session_id=context.session_id,
+                confirmation_tag_a_b64=b64encode(tag_a),
+            ).model_dump(mode="json"),
+        )
+
+        confirmation_response.raise_for_status()
+
+        confirmation_result = (
+            HandshakeConfirmationResponse.model_validate(
+                confirmation_response.json()
+            )
+        )
+
+    except httpx.HTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gateway B confirmation failed: {exc}",
+        ) from exc
+
+    confirmation_roundtrip_ns = (
+        monotonic_ns() - confirmation_started
+    )
+
+    # 4. Make sure GB really accepted TagA
+    if (
+        confirmation_result.session_id != context.session_id
+        or not confirmation_result.established
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Gateway B did not confirm session establishment",
+        )
+
+    # 5. Only now is the session fully established
     session_usable_wall_clock_ns = wall_clock_ns()
     e2e_ns = monotonic_ns() - e2e_started
 
@@ -311,8 +482,12 @@ async def establish_session(
         authorization_verification_ns
         + encapsulation_ns
         + kdf_ns
+        + gateway_a_signature_generation_ns
+        + gateway_b_signature_verification_ns
         + confirmation_verification_ns
+        + confirmation_tag_a_ns
     )
+
 
     commitment = derive_session_commitment(
         context.session_id,
@@ -394,6 +569,12 @@ async def establish_session(
         gateway_b_verification_ns=(
             authorization_result.gateway_b_verification_ns
         ),
+        gateway_a_signature_generation_ns=(
+            gateway_a_signature_generation_ns
+        ),
+        gateway_a_gateway_b_signature_verification_ns=(
+            gateway_b_signature_verification_ns
+        ),
         gateway_b_decapsulation_ns=(
             handshake_result.gateway_b_decapsulation_ns
         ),
@@ -401,8 +582,20 @@ async def establish_session(
         gateway_b_mac_ns=handshake_result.gateway_b_mac_ns,
         gateway_b_total_crypto_ns=(
             handshake_result.gateway_b_total_crypto_ns
+            + confirmation_result.gateway_b_confirmation_verification_ns
+        ),
+        gateway_b_gateway_a_signature_verification_ns=(
+            handshake_result.gateway_b_gateway_a_signature_verification_ns
+        ),
+        gateway_b_signature_generation_ns=(
+            handshake_result.gateway_b_signature_generation_ns
         ),
         gateway_b_handshake_roundtrip_ns=handshake_roundtrip_ns,
         ledger_enqueue_ns=ledger_enqueue_ns,
         ledger_job_id=ledger_job_id,
+        gateway_a_confirmation_tag_ns=confirmation_tag_a_ns,
+        gateway_b_confirmation_verification_ns=(
+            confirmation_result.gateway_b_confirmation_verification_ns
+        ),
+        gateway_confirmation_roundtrip_ns=confirmation_roundtrip_ns,
     )

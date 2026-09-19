@@ -97,6 +97,8 @@ services:
       SAC_URL: http://sac:8000
       LEDGER_URL: http://ledger-adapter:8000
       SAC_CHANNEL_KEY_B_B64: ${SAC_CHANNEL_KEY_B_B64:?required}
+      GATEWAY_B_SIGNING_SEED_B64: ${GATEWAY_B_SIGNING_SEED_B64:?required}
+      GATEWAY_A_SIGNING_PUBLIC_KEY_B64: ${GATEWAY_A_SIGNING_PUBLIC_KEY_B64:?required}
     ports:
       - "8082:8000"
     depends_on:
@@ -131,6 +133,8 @@ services:
       GATEWAY_B_URL: http://gateway-b:8000
       LEDGER_URL: http://ledger-adapter:8000
       SAC_CHANNEL_KEY_A_B64: ${SAC_CHANNEL_KEY_A_B64:?required}
+      GATEWAY_A_SIGNING_SEED_B64: ${GATEWAY_A_SIGNING_SEED_B64:?required}
+      GATEWAY_B_SIGNING_PUBLIC_KEY_B64: ${GATEWAY_B_SIGNING_PUBLIC_KEY_B64:?required}
     ports:
       - "8080:8000"
     depends_on:
