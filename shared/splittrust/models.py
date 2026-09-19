@@ -136,6 +136,7 @@ class LedgerCommitStatus(BaseModel):
 class LedgerRevocationRequest(BaseModel):
     trace_id: str
     session_id: str
+    session_anchor: str
     revocation_commitment_b64: str
     requested_wall_clock_ns: int
 
@@ -149,6 +150,7 @@ class LedgerRevocationAccepted(BaseModel):
 class LedgerRevocationStatus(BaseModel):
     job_id: str
     session_id: str
+    session_anchor: str
     status: Literal[
         "queued",
         "submitting",

@@ -184,6 +184,43 @@ async def wait_for_rejection(
         f"Timed out waiting for session {session_id} rejection"
     )
 
+async def wait_for_session_commitment_confirmation(
+    client: httpx.AsyncClient,
+    job_id: str,
+    timeout_seconds: float,
+    poll_interval_seconds: float = 0.05,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+
+    while time.monotonic() < deadline:
+        response = await client.get(
+            f"{LEDGER_URL}/commitments/{job_id}"
+        )
+        response.raise_for_status()
+
+        status = response.json()
+        state = status.get("status")
+
+        if state == "confirmed":
+            if not status.get("ledger_identifier"):
+                raise RuntimeError(
+                    f"Confirmed session commitment {job_id} "
+                    "has no ledger anchor"
+                )
+            return status
+
+        if state == "failed":
+            raise RuntimeError(
+                f"Session commitment {job_id} failed: "
+                f"{status.get('error')!r}"
+            )
+
+        await asyncio.sleep(poll_interval_seconds)
+
+    raise TimeoutError(
+        f"Timed out waiting for session commitment {job_id}"
+    )
+
 async def create_revocation_session(
     client: httpx.AsyncClient,
     index: int,
@@ -247,7 +284,25 @@ async def issue_revocation_case(
                 f"was not usable before revocation: "
                 f"{pre_b_status} {pre_b_detail!r}"
             )
+        session_a_ledger_job_id = session_a_data.get("ledger_job_id")
 
+        if not session_a_ledger_job_id:
+            raise RuntimeError(
+                f"Session {session_a} has no ledger commitment job"
+            )
+
+        session_anchor_status = (
+            await wait_for_session_commitment_confirmation(
+                client,
+                session_a_ledger_job_id,
+                timeout_seconds,
+            )
+        )
+
+        if session_anchor_status.get("session_id") != session_a:
+            raise RuntimeError(
+                "Confirmed ledger commitment belongs to a different session"
+            )
         revoke_response = await client.post(
             f"{GATEWAY_A_URL}/sessions/{session_a}/revoke",
             params={"reason": "benchmark"},

@@ -38,6 +38,8 @@ from shared.splittrust.models import (
     HandshakeRequest,
     HandshakeResponse,
     KemPublicKeyResponse,
+    LedgerCommitStatus,
+    LedgerRevocationStatus,
     SignedSessionPackage,
 )
 from shared.splittrust.observability import (
@@ -149,22 +151,52 @@ async def revocation_monitor(app: FastAPI) -> None:
                     continue
 
                 response.raise_for_status()
-                revocation = response.json()
+                revocation = LedgerRevocationStatus.model_validate(
+                    response.json()
+                )
 
-                if revocation.get("status") != "confirmed":
+                if revocation.status != "confirmed":
+                    continue
+
+                anchor_response = await app.state.client.get(
+                    f"{LEDGER_URL}/session-commitments/"
+                    f"{session.session_id}"
+                )
+
+                if anchor_response.status_code == 404:
+                    continue
+
+                anchor_response.raise_for_status()
+
+                commitment = LedgerCommitStatus.model_validate(
+                    anchor_response.json()
+                )
+
+                if commitment.status != "confirmed":
+                    continue
+
+                if not commitment.ledger_identifier:
+                    continue
+
+                if revocation.session_anchor != commitment.ledger_identifier:
+                    log_event(
+                        SERVICE,
+                        "revocation_anchor_mismatch",
+                        session.trace_id,
+                        session_id=session.session_id,
+                        revocation_job_id=revocation.job_id,
+                        revocation_session_anchor=revocation.session_anchor,
+                        confirmed_session_anchor=commitment.ledger_identifier,
+                    )
                     continue
 
                 detected_at = wall_clock_ns()
-                confirmed_at = revocation.get(
-                    "confirmed_wall_clock_ns"
-                )
+                confirmed_at = revocation.confirmed_wall_clock_ns
 
                 session.revoked = True
                 session.revoked_wall_clock_ns = detected_at
-                session.revocation_confirmed_wall_clock_ns = (
-                    confirmed_at
-                )
-                session.revocation_job_id = revocation.get("job_id")
+                session.revocation_confirmed_wall_clock_ns = confirmed_at
+                session.revocation_job_id = revocation.job_id
 
                 detection_latency_ns = None
                 if isinstance(confirmed_at, int):
@@ -176,6 +208,7 @@ async def revocation_monitor(app: FastAPI) -> None:
                     session.trace_id,
                     session_id=session.session_id,
                     revocation_job_id=session.revocation_job_id,
+                    session_anchor=revocation.session_anchor,
                     confirmed_wall_clock_ns=confirmed_at,
                     enforced_wall_clock_ns=detected_at,
                     detection_latency_ns=detection_latency_ns,
@@ -298,48 +331,6 @@ async def validate_session_action(
         "action": action,
         "authorized": True,
         "revoked": False,
-    }
-
-@app.post("/sessions/{session_id}/revoke")
-async def revoke_session(
-    session_id: str,
-) -> dict[str, object]:
-    session: EstablishedSession | None = (
-        app.state.established_sessions.get(session_id)
-    )
-
-    if session is None:
-        raise HTTPException(
-            status_code=404,
-            detail="Unknown or non-established session",
-        )
-
-    if session.revoked:
-        return {
-            "session_id": session.session_id,
-            "revoked": True,
-            "revoked_wall_clock_ns": session.revoked_wall_clock_ns,
-            "already_revoked": True,
-        }
-
-    revoked_at = wall_clock_ns()
-
-    session.revoked = True
-    session.revoked_wall_clock_ns = revoked_at
-
-    log_event(
-        SERVICE,
-        "session_revoked",
-        session.trace_id,
-        session_id=session.session_id,
-        revoked_wall_clock_ns=revoked_at,
-    )
-
-    return {
-        "session_id": session.session_id,
-        "revoked": True,
-        "revoked_wall_clock_ns": revoked_at,
-        "already_revoked": False,
     }
 
 @app.get(

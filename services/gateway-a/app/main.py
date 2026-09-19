@@ -38,6 +38,7 @@ from shared.splittrust.models import (
     HandshakeResponse,
     LedgerCommitAccepted,
     LedgerCommitRequest,
+    LedgerCommitStatus,
     LedgerRevocationAccepted,
     LedgerRevocationRequest,
     SessionMetrics,
@@ -150,7 +151,9 @@ class EstablishedSessionRecord:
     trace_id: str
     session_id: str
     session_commitment: bytes
+    device_pseudonym: str
     established_wall_clock_ns: int
+    ledger_job_id: str | None = None
     revocation_job_id: str | None = None
     revocation_requested_wall_clock_ns: int | None = None
 
@@ -196,11 +199,55 @@ async def revoke_session(
             "already_requested": True,
         }
 
+    if session.ledger_job_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Session commitment was not queued",
+        )
+
+    try:
+        anchor_response = await app.state.client.get(
+            f"{LEDGER_URL}/commitments/{session.ledger_job_id}"
+        )
+        anchor_response.raise_for_status()
+        anchor_status = LedgerCommitStatus.model_validate(
+            anchor_response.json()
+        )
+    except Exception as exc:
+        log_event(
+            SERVICE,
+            "session_anchor_lookup_failed",
+            session.trace_id,
+            session_id=session.session_id,
+            ledger_job_id=session.ledger_job_id,
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="Unable to resolve session ledger commitment",
+        ) from exc
+
+    if anchor_status.status != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="Session commitment is not yet confirmed",
+        )
+
+    if not anchor_status.ledger_identifier:
+        raise HTTPException(
+            status_code=409,
+            detail="Confirmed session commitment has no ledger anchor",
+        )
+
+    session_anchor = anchor_status.ledger_identifier
+
     requested_at = wall_clock_ns()
 
     revocation_commitment = derive_revocation_commitment(
         session_id=session.session_id,
         session_commitment=session.session_commitment,
+        session_anchor=session_anchor,
+        device_pseudonym=session.device_pseudonym,
         revocation_context=reason,
         revoked_at_ns=requested_at,
     )
@@ -211,6 +258,7 @@ async def revoke_session(
             json=LedgerRevocationRequest(
                 trace_id=session.trace_id,
                 session_id=session.session_id,
+                session_anchor=session_anchor,
                 revocation_commitment_b64=b64encode(
                     revocation_commitment
                 ),
@@ -246,6 +294,7 @@ async def revoke_session(
         "revocation_requested",
         session.trace_id,
         session_id=session.session_id,
+        session_anchor=session_anchor,
         revocation_job_id=result.job_id,
         requested_wall_clock_ns=requested_at,
         reason=reason,
@@ -601,6 +650,7 @@ async def establish_session(
             trace_id=trace_id,
             session_id=context.session_id,
             session_commitment=commitment,
+            device_pseudonym=context.device_pseudonym,
             established_wall_clock_ns=session_usable_wall_clock_ns,
         )
     )
@@ -627,6 +677,11 @@ async def establish_session(
             ledger_response.json()
         )
         ledger_job_id = ledger_result.job_id
+        session_record = app.state.established_sessions.get(
+            context.session_id
+        )
+        if session_record is not None:
+            session_record.ledger_job_id = ledger_job_id
     except Exception as exc:
         log_event(
             SERVICE,

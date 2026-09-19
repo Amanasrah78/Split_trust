@@ -43,6 +43,7 @@ if len(b64decode(LEDGER_EPOCH_DIGEST_B64)) != 32:
 queue: asyncio.Queue[tuple[str, LedgerCommitRequest]] = asyncio.Queue()
 records: dict[str, LedgerCommitStatus] = {}
 started_ns: dict[str, int] = {}
+commitment_jobs_by_session: dict[str, str] = {}
 iota_backend: IotaBackend | None = None
 
 revocation_queue: asyncio.Queue[
@@ -63,7 +64,9 @@ async def commitment_worker() -> None:
 
             if LEDGER_MODE == "simulated":
                 await asyncio.sleep(SIMULATED_FINALITY_MS / 1000)
+                record.ledger_identifier = f"simulated:{job_id}"
                 record.lookup_status = "simulated"
+
             else:
                 assert iota_backend is not None
 
@@ -280,7 +283,21 @@ async def submit_commitment(
             status_code=400,
             detail="Commitment must be a 32-byte SHA-256 digest",
         )
+    existing_job_id = commitment_jobs_by_session.get(
+        request.session_id
+    )
 
+    if existing_job_id is not None:
+        existing_record = records.get(existing_job_id)
+
+        if (
+            existing_record is not None
+            and existing_record.status != "failed"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="A session commitment already exists for this session",
+            )
     job_id = uuid.uuid4().hex
     queued_at = wall_clock_ns()
 
@@ -290,6 +307,7 @@ async def submit_commitment(
         status="queued",
         queued_wall_clock_ns=queued_at,
     )
+    commitment_jobs_by_session[request.session_id] = job_id
     started_ns[job_id] = monotonic_ns()
     queue.put_nowait((job_id, request))
 
@@ -319,6 +337,31 @@ async def commitment_status(job_id: str) -> LedgerCommitStatus:
         raise HTTPException(status_code=404, detail="Unknown job identifier")
     return record
 
+@app.get(
+    "/session-commitments/{session_id}",
+    response_model=LedgerCommitStatus,
+)
+async def session_commitment_status(
+    session_id: str,
+) -> LedgerCommitStatus:
+    job_id = commitment_jobs_by_session.get(session_id)
+
+    if job_id is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No commitment exists for this session",
+        )
+
+    record = records.get(job_id)
+
+    if record is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Session commitment record is unavailable",
+        )
+
+    return record
+
 @app.post(
     "/revocations",
     response_model=LedgerRevocationAccepted,
@@ -337,12 +380,48 @@ async def submit_revocation(
             detail="Revocation commitment must be a 32-byte SHA-256 digest",
         )
 
+    commitment_job_id = commitment_jobs_by_session.get(
+        request.session_id
+    )
+
+    if commitment_job_id is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Session has no ledger commitment",
+        )
+
+    commitment_record = records.get(commitment_job_id)
+
+    if commitment_record is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Session commitment record is unavailable",
+        )
+
+    if commitment_record.status != "confirmed":
+        raise HTTPException(
+            status_code=409,
+            detail="Session commitment is not yet confirmed",
+        )
+
+    if commitment_record.ledger_identifier is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Confirmed session commitment has no ledger anchor",
+        )
+
+    if request.session_anchor != commitment_record.ledger_identifier:
+        raise HTTPException(
+            status_code=409,
+            detail="Revocation session anchor does not match confirmed commitment",
+        )
     job_id = uuid.uuid4().hex
     queued_at = wall_clock_ns()
 
     revocation_records[job_id] = LedgerRevocationStatus(
         job_id=job_id,
         session_id=request.session_id,
+        session_anchor=request.session_anchor,
         status="queued",
         queued_wall_clock_ns=queued_at,
     )
