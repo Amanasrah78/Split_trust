@@ -2,13 +2,15 @@
 
 This testbed implements SAC-inclusive cross-domain authorization and post-quantum session establishment.
 
+Reproducibility revision: `5e72b86` (`align-protocol-tamarin`).
+
 ## Services
 
 - `gateway-a`: initiates authorization and ML-KEM encapsulation.
 - `gateway-b`: verifies SAC provisioning and performs ML-KEM decapsulation.
 - `sac`: evaluates policy, signs session context, and provisions authorization inputs.
 - `ledger-adapter`: processes commitments after session usability.
-- `loadgen`: runs E2E and SAC scalability experiments.
+- `loadgen`: runs E2E, SAC concurrency, overload, and logical multi-domain scalability experiments.
 
 ## Host ports
 
@@ -97,6 +99,39 @@ Each level used five trials of 2,000 requests after 100 warm-ups.
 
 The highest observed throughput was `1365.14 ± 17.15 authorizations/s` at concurrency 5. The saturation knee lies between concurrency 5 and 10.
 
+## Logical multi-domain scalability
+
+The logical domain-registry experiment varies the number of registered
+administrative domains as `N = {2, 5, 10, 25, 50}` while fixing authorization
+concurrency at `C = 10`. For each `N`, SAC and Gateway B are initialized with
+the corresponding gateway-DID registry and an indexed policy table containing
+all `N(N-1)` ordered source-destination domain relationships.
+
+Each configuration uses five independent trials, with 100 warm-up requests
+followed by 1,000 measured authorization requests per trial. Across the full
+campaign, 25,000/25,000 measured requests completed successfully with zero
+failures.
+
+| Domains N | Ordered policies | Throughput, auth/s | Client mean | Client p95 | Authorization-path mean | Authorization-path p95 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 2 | 2 | 1038.92 ± 64.95 | 9.54 ± 0.59 ms | 21.92 ± 2.32 ms | 7.55 ± 0.52 ms | 18.83 ± 1.99 ms |
+| 5 | 20 | 1095.22 ± 46.70 | 9.03 ± 0.37 ms | 19.40 ± 0.58 ms | 7.21 ± 0.20 ms | 17.02 ± 0.38 ms |
+| 10 | 90 | 1062.00 ± 93.36 | 9.36 ± 0.83 ms | 20.87 ± 2.69 ms | 7.57 ± 0.59 ms | 18.61 ± 2.43 ms |
+| 25 | 600 | 1002.57 ± 67.34 | 9.88 ± 0.65 ms | 21.74 ± 1.40 ms | 7.83 ± 0.59 ms | 18.92 ± 1.59 ms |
+| 50 | 2450 | 983.38 ± 61.02 | 10.08 ± 0.61 ms | 22.37 ± 1.31 ms | 8.05 ± 0.63 ms | 19.89 ± 1.55 ms |
+
+Values are trial means ± 95% confidence intervals.
+
+From `N=2` to `N=50`, throughput decreased by 5.35%, client mean latency
+increased by 5.66%, client p95 increased by 2.05%, and authorization-path mean
+latency increased by 6.67%. Direct two-sided permutation comparisons between
+the `N=2` and `N=50` trials did not detect a significant endpoint difference
+for the reported throughput or latency metrics (`p > 0.1` in each case).
+
+This experiment measures logical registry and indexed authorization-policy
+scaling. It does not represent 50 physically independent or geographically
+distributed gateway deployments.
+
 ## Reproduction commands
 
 Build and start:
@@ -106,7 +141,7 @@ Build and start:
 
 Run tests:
 
-    docker compose run --rm loadgen pytest -q /app/tests
+    docker compose run --rm sac python -m pytest -q /app/tests
 
 Run E2E trials:
 
@@ -118,6 +153,16 @@ Run SAC trials:
 
     ./scripts/run_sac_repeated.sh
     python3 scripts/aggregate_repeated.py sac
+
+Run the logical multi-domain scalability campaign:
+
+    ./scripts/run_multidomain_campaign.sh
+
+The campaign varies `N` over 5, 10, 25, and 50 logical domains. The script
+uses `REGISTERED_GATEWAY_DIDS`, recreates SAC and Gateway B when `N` changes,
+restarts them between trials, and runs five trials per configuration at
+concurrency 10. The `--domains` load-generator option is available for
+individual SAC-mode domain-scaling runs.
 
 Run the controlled network-delay matrix (Experiment B):
 
@@ -144,6 +189,10 @@ application traffic on an already established session.
 
 ## Result files
 
+Benchmark commands write generated output under `results/`. Raw experiment
+logs and JSONL datasets are generated locally and are not all committed to the
+repository. The implementation and reproduction scripts are versioned.
+
 - `results/environment.txt`
 - `results/experiment-manifest.json`
 - `results/e2e-repeated-aggregate.csv`
@@ -165,6 +214,8 @@ application traffic on an already established session.
 6. Client latency is authoritative for SAC scalability because it includes queueing.
 7. The cached ledger epoch is loaded before the E2E timer begins.
 8. Simulated ledger finality must not be presented as a live-IOTA measurement.
+9. The `N={2,5,10,25,50}` experiment measures logical registry and policy-state
+   scaling, not physically or geographically independent gateway deployments.
 
 ## Manuscript alignment
 
