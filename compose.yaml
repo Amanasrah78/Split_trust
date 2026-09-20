@@ -59,6 +59,7 @@ services:
     environment:
       GATEWAY_A_DID: did:iota:gateway-a
       GATEWAY_B_DID: did:iota:gateway-b
+      REGISTERED_GATEWAY_DIDS: ${REGISTERED_GATEWAY_DIDS:-did:iota:gateway-a,did:iota:gateway-b}
       GATEWAY_B_URL: http://gateway-b:8000
       LEDGER_URL: http://ledger-adapter:8000
       SAC_SIGNING_SEED_B64: ${SAC_SIGNING_SEED_B64:?required}
@@ -94,6 +95,7 @@ services:
     environment:
       GATEWAY_A_DID: did:iota:gateway-a
       GATEWAY_B_DID: did:iota:gateway-b
+      REGISTERED_GATEWAY_DIDS: ${REGISTERED_GATEWAY_DIDS:-did:iota:gateway-a,did:iota:gateway-b}
       SAC_URL: http://sac:8000
       LEDGER_URL: http://ledger-adapter:8000
       SAC_CHANNEL_KEY_B_B64: ${SAC_CHANNEL_KEY_B_B64:?required}

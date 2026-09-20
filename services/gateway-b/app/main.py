@@ -51,6 +51,19 @@ from shared.splittrust.observability import (
 SERVICE = "gateway-b"
 GATEWAY_A_DID = os.getenv("GATEWAY_A_DID", "did:iota:gateway-a")
 GATEWAY_B_DID = os.getenv("GATEWAY_B_DID", "did:iota:gateway-b")
+REGISTERED_GATEWAY_DIDS = frozenset(
+    item.strip()
+    for item in os.getenv(
+        "REGISTERED_GATEWAY_DIDS",
+        f"{GATEWAY_A_DID},{GATEWAY_B_DID}",
+    ).split(",")
+    if item.strip()
+)
+
+if len(REGISTERED_GATEWAY_DIDS) < 2:
+    raise RuntimeError(
+        "REGISTERED_GATEWAY_DIDS must contain at least two gateway DIDs"
+    )
 SAC_URL = os.getenv("SAC_URL", "http://sac:8000")
 LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger-adapter:8000")
 REVOCATION_POLL_INTERVAL_MS = int(
@@ -366,10 +379,14 @@ async def provision_authorization(
             package,
         )
 
-        if context.gateway_a_did != GATEWAY_A_DID:
-            raise ValueError("Gateway A DID mismatch")
-        if context.gateway_b_did != GATEWAY_B_DID:
-            raise ValueError("Gateway B DID mismatch")
+        if context.gateway_a_did not in REGISTERED_GATEWAY_DIDS:
+            raise ValueError("Unknown Gateway A DID")
+        if context.gateway_b_did not in REGISTERED_GATEWAY_DIDS:
+            raise ValueError("Unknown Gateway B DID")
+        if context.gateway_a_did == context.gateway_b_did:
+            raise ValueError(
+                "Source and destination gateways must be different"
+            )
         if context.expires_at_ns <= wall_clock_ns():
             raise ValueError("Authorization has expired")
 
@@ -402,6 +419,12 @@ async def provision_authorization(
         ):
             raise ValueError("SAC salt commitment mismatch")
     except Exception as exc:
+        log_event(
+            SERVICE,
+            "authorization_verification_failed",
+            authorization.trace_id,
+            error=f"{type(exc).__name__}: {exc}",
+        )
         raise HTTPException(
             status_code=400,
             detail=f"Authorization verification failed: {exc}",

@@ -53,18 +53,35 @@ def latency_summary(values_ns: list[int]) -> dict[str, float]:
     }
 
 
-def request_body(mode: str, index: int) -> dict[str, Any]:
+def request_body(
+    mode: str,
+    index: int,
+    domains: int = 0,
+) -> dict[str, Any]:
     if mode == "e2e":
         return {
             "device_handle": f"actuator-{index % 100}",
             "action": "operate",
             "requested_ttl_seconds": 60,
         }
+    if domains >= 2:
+        source_index = index % domains
+        destination_offset = 1 + (
+            (index // domains) % (domains - 1)
+        )
+        destination_index = (
+            source_index + destination_offset
+        ) % domains
 
+        gateway_a_did = f"did:iota:gateway-{source_index + 1}"
+        gateway_b_did = f"did:iota:gateway-{destination_index + 1}"
+    else:
+        gateway_a_did = "did:iota:gateway-a"
+        gateway_b_did = "did:iota:gateway-b"
     return {
         "trace_id": uuid.uuid4().hex,
-        "gateway_a_did": "did:iota:gateway-a",
-        "gateway_b_did": "did:iota:gateway-b",
+        "gateway_a_did": gateway_a_did,
+        "gateway_b_did": gateway_b_did,
         "device_handle": f"actuator-{index % 100}",
         "action": "operate",
         "requested_ttl_seconds": 60,
@@ -624,13 +641,14 @@ async def issue_request(
     client: httpx.AsyncClient,
     mode: str,
     index: int,
+    domains: int = 0,
 ) -> dict[str, Any]:
     started = time.perf_counter_ns()
 
     try:
         response = await client.post(
             target_url(mode),
-            json=request_body(mode, index),
+            json=request_body(mode, index, domains),
         )
         elapsed_ns = time.perf_counter_ns() - started
         response.raise_for_status()
@@ -647,7 +665,7 @@ async def issue_request(
             "index": index,
             "ok": False,
             "client_elapsed_ns": time.perf_counter_ns() - started,
-            "error": str(exc),
+            "error": f"{type(exc).__name__}: {exc}",
         }
 
 
@@ -670,6 +688,7 @@ async def run(args: argparse.Namespace) -> None:
                 client,
                 args.mode,
                 -index - 1,
+                args.domains,
             )
             if not result["ok"]:
                 raise RuntimeError(
@@ -684,6 +703,7 @@ async def run(args: argparse.Namespace) -> None:
                     client,
                     args.mode,
                     index,
+                    args.domains,
                 )
 
         test_started = time.perf_counter_ns()
@@ -709,8 +729,14 @@ async def run(args: argparse.Namespace) -> None:
         exist_ok=True,
     )
 
+    domain_tag = (
+        f"-d{args.domains}"
+        if args.domains
+        else ""
+    )
+
     stem = (
-        f"{args.mode}-c{args.concurrency}-n{args.requests}"
+        f"{args.mode}{domain_tag}-c{args.concurrency}-n{args.requests}"
         f"-{args.run_id}"
     )
 
@@ -728,6 +754,7 @@ async def run(args: argparse.Namespace) -> None:
         "requests": args.requests,
         "warmup": args.warmup,
         "concurrency": args.concurrency,
+        "domains": args.domains,
         "successes": len(successes),
         "failures": len(failures),
         "test_elapsed_seconds": (
@@ -781,6 +808,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--requests", type=int, default=100)
     parser.add_argument("--concurrency", type=int, default=1)
+    parser.add_argument(
+        "--domains",
+        type=int,
+        default=0,
+        help=(
+            "Number of registered logical gateway domains for SAC-mode "
+            "domain-scaling experiments; 0 preserves the default two-gateway pair"
+        ),
+    )
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument("--run-id", default="run1")
@@ -794,6 +830,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--requests must be at least 1")
     if args.concurrency < 1:
         parser.error("--concurrency must be at least 1")
+    if args.domains not in (0,) and args.domains < 2:
+        parser.error("--domains must be 0 or at least 2")
+    if args.domains and args.mode != "sac":
+        parser.error("--domains is supported only with --mode sac")
     if args.warmup < 0:
         parser.error("--warmup cannot be negative")
 

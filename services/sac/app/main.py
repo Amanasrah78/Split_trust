@@ -33,10 +33,40 @@ from shared.splittrust.observability import (
 )
 
 SERVICE = "sac"
-GATEWAY_A_DID = os.getenv("GATEWAY_A_DID", "did:iota:gateway-a")
-GATEWAY_B_DID = os.getenv("GATEWAY_B_DID", "did:iota:gateway-b")
-GATEWAY_B_URL = os.getenv("GATEWAY_B_URL", "http://gateway-b:8000")
-LEDGER_URL = os.getenv("LEDGER_URL", "http://ledger-adapter:8000")
+GATEWAY_A_DID = os.getenv(
+    "GATEWAY_A_DID",
+    "did:iota:gateway-a",
+)
+
+GATEWAY_B_DID = os.getenv(
+    "GATEWAY_B_DID",
+    "did:iota:gateway-b",
+)
+
+REGISTERED_GATEWAY_DIDS = frozenset(
+    item.strip()
+    for item in os.getenv(
+        "REGISTERED_GATEWAY_DIDS",
+        f"{GATEWAY_A_DID},{GATEWAY_B_DID}",
+    ).split(",")
+    if item.strip()
+)
+
+if len(REGISTERED_GATEWAY_DIDS) < 2:
+    raise RuntimeError(
+        "REGISTERED_GATEWAY_DIDS must contain at least two gateway DIDs"
+    )
+
+GATEWAY_B_URL = os.getenv(
+    "GATEWAY_B_URL",
+    "http://gateway-b:8000",
+)
+
+LEDGER_URL = os.getenv(
+    "LEDGER_URL",
+    "http://ledger-adapter:8000",
+)
+
 ALLOWED_ACTIONS = {
     item.strip()
     for item in os.getenv(
@@ -45,6 +75,14 @@ ALLOWED_ACTIONS = {
     ).split(",")
     if item.strip()
 }
+
+DOMAIN_PAIR_POLICIES = {
+    (source_did, destination_did): ALLOWED_ACTIONS
+    for source_did in REGISTERED_GATEWAY_DIDS
+    for destination_did in REGISTERED_GATEWAY_DIDS
+    if source_did != destination_did
+}
+
 
 SIGNING_SEED = b64decode(os.environ["SAC_SIGNING_SEED_B64"])
 CHANNEL_KEY_A = b64decode(os.environ["SAC_CHANNEL_KEY_A_B64"])
@@ -135,12 +173,24 @@ async def authorize(
 
     policy_started = monotonic_ns()
 
-    if request.gateway_a_did != GATEWAY_A_DID:
-        raise HTTPException(status_code=403, detail="Unknown Gateway A")
-    if request.gateway_b_did != GATEWAY_B_DID:
-        raise HTTPException(status_code=403, detail="Unknown Gateway B")
-    if request.action not in ALLOWED_ACTIONS:
-        raise HTTPException(status_code=403, detail="Action is not allowed")
+    pair_policy = DOMAIN_PAIR_POLICIES.get(
+        (
+            request.gateway_a_did,
+            request.gateway_b_did,
+        )
+    )
+
+    if pair_policy is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Cross-domain gateway pair is not authorized",
+        )
+
+    if request.action not in pair_policy:
+        raise HTTPException(
+            status_code=403,
+            detail="Action is not allowed for this domain pair",
+        )
     if not request.device_handle.strip():
         raise HTTPException(status_code=403, detail="Invalid device handle")
 
@@ -176,8 +226,8 @@ async def authorize(
 
     context = SessionContext(
         session_id=session_id,
-        gateway_a_did=GATEWAY_A_DID,
-        gateway_b_did=GATEWAY_B_DID,
+        gateway_a_did=request.gateway_a_did,
+        gateway_b_did=request.gateway_b_did,
         device_pseudonym=device_pseudonym,
         issued_at_ns=issued_at_ns,
         expires_at_ns=expires_at_ns,
@@ -188,8 +238,8 @@ async def authorize(
 
     capability = CapabilityClaims(
         session_id=session_id,
-        gateway_a_did=GATEWAY_A_DID,
-        gateway_b_did=GATEWAY_B_DID,
+        gateway_a_did=request.gateway_a_did,
+        gateway_b_did=request.gateway_b_did,
         device_pseudonym=device_pseudonym,
         action=request.action,
         expires_at_ns=expires_at_ns,
