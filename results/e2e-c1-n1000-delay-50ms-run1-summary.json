@@ -1,27 +1,27 @@
 {
   "client_latency": {
-    "max_ms": 372.140042,
-    "mean_ms": 338.22760361,
-    "median_ms": 339.780896,
-    "min_ms": 312.909708,
-    "p95_ms": 354.5573545,
-    "p99_ms": 360.44271724
+    "max_ms": 504.077583,
+    "mean_ms": 453.872018806,
+    "median_ms": 454.015875,
+    "min_ms": 417.697834,
+    "p95_ms": 476.4301715,
+    "p99_ms": 484.72239242
   },
   "concurrency": 1,
   "failures": 0,
   "mode": "e2e",
   "primary_latency": {
-    "max_ms": 364.0245,
-    "mean_ms": 332.010750927,
-    "median_ms": 333.5346665,
-    "min_ms": 309.299542,
-    "p95_ms": 346.459542,
-    "p99_ms": 352.81048884
+    "max_ms": 496.080917,
+    "mean_ms": 448.462097826,
+    "median_ms": 448.88858400000004,
+    "min_ms": 413.538917,
+    "p95_ms": 470.267825,
+    "p99_ms": 478.64444542
   },
   "primary_metric": "e2e_ns",
   "requests": 1000,
   "successes": 1000,
-  "test_elapsed_seconds": 338.296089403,
-  "throughput_successes_per_second": 2.955990421777344,
+  "test_elapsed_seconds": 453.942703664,
+  "throughput_successes_per_second": 2.202921187913137,
   "warmup": 100
 }

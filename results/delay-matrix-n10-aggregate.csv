@@ -1,2 +1,0 @@
-one_way_delay_ms,trials,requests_per_trial,total_successes,total_failures,e2e_mean_ms,e2e_mean_ci95_ms,e2e_p95_ms,e2e_p95_ci95_ms
-5,1,10,10,0,43.4541045,0.0,46.06100245,0.0

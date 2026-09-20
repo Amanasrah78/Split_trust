@@ -5,3 +5,5 @@ __pycache__/
 .DS_Store
 results/reviewer-response.md
 iota/commitment-registry/build/
+iota-client-config/
+results-pre-handshake-alignment-20260919/

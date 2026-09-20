@@ -50,24 +50,21 @@ for path in paths:
     records = [record for record in records if record.get("ok")]
 
     for record in records:
-        record["gateway_crypto_core_ns"] = sum(
-            record[field]
-            for field in (
-                "gateway_a_encapsulation_ns",
-                "gateway_a_kdf_ns",
-                "gateway_a_confirmation_verification_ns",
-                "gateway_b_decapsulation_ns",
-                "gateway_b_kdf_ns",
-                "gateway_b_mac_ns",
-            )
-        )
         record["authorization_verification_combined_ns"] = (
             record["gateway_a_authorization_verification_ns"]
             + record["gateway_b_verification_ns"]
         )
+
+        record["gateway_crypto_core_ns"] = (
+            record["gateway_a_total_crypto_ns"]
+            - record["gateway_a_authorization_verification_ns"]
+            + record["gateway_b_total_crypto_ns"]
+        )
+
         record["gateway_crypto_full_ns"] = (
-            record["gateway_crypto_core_ns"]
-            + record["authorization_verification_combined_ns"]
+            record["gateway_a_total_crypto_ns"]
+            + record["gateway_b_total_crypto_ns"]
+            + record["gateway_b_verification_ns"]
         )
         record["sac_compute_excluding_gb_roundtrip_ns"] = max(
             0,

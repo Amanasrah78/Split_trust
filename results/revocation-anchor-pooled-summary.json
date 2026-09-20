@@ -1,0 +1,49 @@
+{
+  "campaign": "anchor-enforced-revocation",
+  "runs": 5,
+  "observations": 500,
+  "requests_per_run": 100,
+  "concurrency": 10,
+  "correctness": {
+    "successes": 500,
+    "failures": 0,
+    "correctly_enforced": 500,
+    "controls_preserved": 500,
+    "reuse_rejected": 500,
+    "post_enforcement_reuse_accepts": 0,
+    "unaffected_session_failures": 0
+  },
+  "ledger_finality": {
+    "min_ms": 11998.663005,
+    "mean_ms": 12000.505961114,
+    "median_ms": 12000.390464,
+    "p95_ms": 12001.96986635,
+    "p99_ms": 12002.93556775,
+    "max_ms": 12005.634463
+  },
+  "request_to_confirmation": {
+    "min_ms": 11995.747367,
+    "mean_ms": 12001.963406366,
+    "median_ms": 12001.6876445,
+    "p95_ms": 12004.985577149999,
+    "p99_ms": 12006.719691170001,
+    "max_ms": 12012.242908
+  },
+  "confirmation_to_observed_rejection": {
+    "min_ms": 11.081333,
+    "mean_ms": 87.07291430400001,
+    "median_ms": 86.2980205,
+    "p95_ms": 144.12382854999996,
+    "p99_ms": 165.82129106999997,
+    "max_ms": 179.13175
+  },
+  "request_to_observed_rejection": {
+    "min_ms": 12011.265575,
+    "mean_ms": 12089.036320669999,
+    "median_ms": 12087.6212275,
+    "p95_ms": 12146.055161600001,
+    "p99_ms": 12166.36418172,
+    "max_ms": 12181.427089
+  },
+  "all_checks_passed": true
+}

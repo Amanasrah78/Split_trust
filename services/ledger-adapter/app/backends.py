@@ -137,13 +137,25 @@ class IotaBackend:
         )
 
     def submission_command(
-        self, commitment: bytes, session_id: str
+        self,
+        commitment: bytes,
+        session_id: str,
+        tag_hex: str | None = None,
     ) -> list[str]:
         if len(commitment) != 32:
             raise ValueError("IOTA commitment must contain 32 bytes")
+
         session_bytes = session_id.encode("ascii")
         if len(session_bytes) != 32:
-            raise ValueError("Session identifier must contain 32 ASCII bytes")
+            raise ValueError(
+                "Session identifier must contain 32 ASCII bytes"
+            )
+
+        selected_tag_hex = tag_hex or self.tag_hex
+        selected_tag = bytes.fromhex(selected_tag_hex)
+
+        if len(selected_tag) != 16:
+            raise ValueError("IOTA tag must encode 16 bytes")
 
         return [
             self.cli_path,
@@ -156,7 +168,7 @@ class IotaBackend:
             "--function",
             self.function,
             "--args",
-            f"0x{self.tag_hex}",
+            f"0x{selected_tag_hex}",
             f"0x{commitment.hex()}",
             f"0x{session_bytes.hex()}",
             "--gas-budget",
@@ -169,10 +181,15 @@ class IotaBackend:
         commitment: bytes,
         session_id: str,
         on_submitted: Callable[[str, int], None] | None = None,
+        tag_hex: str | None = None,
     ) -> LedgerResult:
         started = monotonic_ns()
         output = await self.command_runner(
-            self.submission_command(commitment, session_id),
+            self.submission_command(
+                commitment,
+                session_id,
+                tag_hex=tag_hex,
+            ),
             self.submit_timeout_seconds,
         )
         submit_latency_ns = monotonic_ns() - started

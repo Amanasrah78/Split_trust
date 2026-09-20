@@ -18,5 +18,4 @@ services:
       IOTA_SUBMIT_TIMEOUT_SECONDS: ${IOTA_SUBMIT_TIMEOUT_SECONDS:-60}
       IOTA_CONFIRMATION_TIMEOUT_SECONDS: ${IOTA_CONFIRMATION_TIMEOUT_SECONDS:-60}
     volumes:
-      - ${IOTA_CLI_BINARY:?path to a Linux IOTA CLI binary}:/usr/local/bin/iota:ro
       - ${IOTA_CLIENT_CONFIG_DIR:?path to an initialized IOTA client directory}:/root/.iota:ro

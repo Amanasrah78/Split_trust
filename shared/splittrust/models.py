@@ -78,16 +78,30 @@ class HandshakeRequest(BaseModel):
     session_id: str
     kem_ciphertext_b64: str
     nonce_a_b64: str
-
+    gateway_a_signature_b64: str
 
 class HandshakeResponse(BaseModel):
     session_id: str
     nonce_b_b64: str
     confirmation_tag_b64: str
+    gateway_b_signature_b64: str
+    gateway_b_gateway_a_signature_verification_ns: int
     gateway_b_decapsulation_ns: int
     gateway_b_kdf_ns: int
     gateway_b_mac_ns: int
+    gateway_b_signature_generation_ns: int
     gateway_b_total_crypto_ns: int
+
+class HandshakeConfirmationRequest(BaseModel):
+    trace_id: str
+    session_id: str
+    confirmation_tag_a_b64: str
+
+
+class HandshakeConfirmationResponse(BaseModel):
+    session_id: str
+    established: bool
+    gateway_b_confirmation_verification_ns: int
 
 
 class LedgerCommitRequest(BaseModel):
@@ -119,6 +133,40 @@ class LedgerCommitStatus(BaseModel):
     failure_kind: str | None = None
     error: str | None = None
 
+class LedgerRevocationRequest(BaseModel):
+    trace_id: str
+    session_id: str
+    session_anchor: str
+    revocation_commitment_b64: str
+    requested_wall_clock_ns: int
+
+
+class LedgerRevocationAccepted(BaseModel):
+    job_id: str
+    session_id: str
+    status: Literal["queued"]
+
+
+class LedgerRevocationStatus(BaseModel):
+    job_id: str
+    session_id: str
+    session_anchor: str
+    status: Literal[
+        "queued",
+        "submitting",
+        "confirming",
+        "confirmed",
+        "failed",
+    ]
+    queued_wall_clock_ns: int
+    confirmed_wall_clock_ns: int | None = None
+    ledger_final_ns: int | None = None
+    submit_latency_ns: int | None = None
+    confirmation_latency_ns: int | None = None
+    ledger_identifier: str | None = None
+    lookup_status: str | None = None
+    failure_kind: str | None = None
+    error: str | None = None
 
 class SessionRequest(BaseModel):
     device_handle: str = "actuator-r"
@@ -142,12 +190,31 @@ class SessionMetrics(BaseModel):
     gateway_a_encapsulation_ns: int
     gateway_a_kdf_ns: int
     gateway_a_confirmation_verification_ns: int
+    gateway_a_confirmation_tag_ns: int
     gateway_a_total_crypto_ns: int
     gateway_b_verification_ns: int
     gateway_b_decapsulation_ns: int
     gateway_b_kdf_ns: int
     gateway_b_mac_ns: int
+    gateway_b_confirmation_verification_ns: int
     gateway_b_total_crypto_ns: int
     gateway_b_handshake_roundtrip_ns: int
+    gateway_confirmation_roundtrip_ns: int
     ledger_enqueue_ns: int
     ledger_job_id: str | None = None
+    gateway_a_signature_generation_ns: int
+    gateway_a_gateway_b_signature_verification_ns: int
+    gateway_b_gateway_a_signature_verification_ns: int
+    gateway_b_signature_generation_ns: int
+
+
+class HandshakeConfirmationRequest(BaseModel):
+    trace_id: str
+    session_id: str
+    confirmation_tag_a_b64: str
+
+
+class HandshakeConfirmationResponse(BaseModel):
+    session_id: str
+    established: bool
+    gateway_b_confirmation_verification_ns: int

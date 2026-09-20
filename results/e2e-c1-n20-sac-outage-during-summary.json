@@ -2,31 +2,31 @@
   "concurrency": 1,
   "failure_examples": [
     {
-      "client_elapsed_ns": 15965500,
+      "client_elapsed_ns": 171997083,
       "error": "Server error '502 Bad Gateway' for url 'http://gateway-a:8000/sessions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
       "index": 0,
       "ok": false
     },
     {
-      "client_elapsed_ns": 3758375,
+      "client_elapsed_ns": 4587375,
       "error": "Server error '502 Bad Gateway' for url 'http://gateway-a:8000/sessions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
       "index": 1,
       "ok": false
     },
     {
-      "client_elapsed_ns": 3862459,
+      "client_elapsed_ns": 4238125,
       "error": "Server error '502 Bad Gateway' for url 'http://gateway-a:8000/sessions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
       "index": 2,
       "ok": false
     },
     {
-      "client_elapsed_ns": 3805083,
+      "client_elapsed_ns": 3766542,
       "error": "Server error '502 Bad Gateway' for url 'http://gateway-a:8000/sessions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
       "index": 3,
       "ok": false
     },
     {
-      "client_elapsed_ns": 3142750,
+      "client_elapsed_ns": 3994084,
       "error": "Server error '502 Bad Gateway' for url 'http://gateway-a:8000/sessions'\nFor more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/502",
       "index": 4,
       "ok": false
@@ -36,7 +36,7 @@
   "mode": "e2e",
   "requests": 20,
   "successes": 0,
-  "test_elapsed_seconds": 0.079183542,
+  "test_elapsed_seconds": 0.249031417,
   "throughput_successes_per_second": 0.0,
   "warmup": 0
 }
